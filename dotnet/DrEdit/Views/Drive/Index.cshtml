@@ -1,0 +1,29 @@
+﻿@{
+    ViewBag.Title = "Index";
+}
+
+<div id="main">
+    <div id="nav-pane">
+    </div>
+    <div id="action-pane">
+        <button type="submit" class="btn" id="create">
+            <i class="icon-file icon"></i>New</button>
+        <button type="submit" class="btn" id="open">
+            <i class="icon-download icon"></i>Open</button>
+        <button type="submit" class="btn" id="edit">
+            <i class="icon-edit icon"></i>Edit</button>
+        <button type="submit" class="btn" id="save">
+            <i class="icon-file icon"></i>Save</button>
+        <div id="saving" class="pull-right alert">
+            Talking to Drive</div>
+    </div>
+    <div id="editor-pane">
+    </div>
+</div>
+<script>
+    var dredit = dredit || {};
+    dredit.FILE_IDS = @Html.Raw(Json.Encode(@ViewBag.FileIds));
+    dredit.CLIENT_ID = @Html.Raw(Json.Encode(@ViewBag.ClientId));
+    google.load('picker', '1');
+</script>
+
