@@ -26,22 +26,22 @@
 ?><html>
   <head>
     <title>DrEdit PHP</title>
-    <link rel="stylesheet" href="/static/bootstrap.min.css"></link>
-    <link rel="stylesheet" href="/static/dredit.css"></link>
+    <link rel="stylesheet" href="static/bootstrap.min.css"></link>
+    <link rel="stylesheet" href="static/dredit.css"></link>
     <script src="https://www.google.com/jsapi" charset="utf-8"></script>
-    <script src="/static/jquery.min.js" 
+    <script src="static/jquery.min.js" 
             type="text/javascript" 
             charset="utf-8"></script>
-    <script src="/static/bootstrap.min.js" 
+    <script src="static/bootstrap.min.js" 
             type="text/javascript" 
             charset="utf-8"></script>
-    <script src="/static/ace/ace.js" 
+    <script src="static/ace/ace.js" 
             type="text/javascript" 
             charset="utf-8"></script>
-    <script src="/static/ace/mode-html.js" 
+    <script src="static/ace/mode-html.js" 
             type="text/javascript" 
             charset="utf-8"></script>
-    <script src="/static/dredit.js" 
+    <script src="static/dredit.js" 
             type="text/javascript" 
             charset="utf-8"></script>
   </head>

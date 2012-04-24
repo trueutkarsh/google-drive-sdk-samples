@@ -247,7 +247,7 @@ dredit.Page.prototype.OpenError = function(xhr, text_status, error) {
 
 dredit.Page.prototype.Get = function() {
   $.ajax({
-      url: '/svc.php?file_id=' + this.file_id,
+      url: 'svc.php?file_id=' + this.file_id,
       success: this.GetSuccess,
       error: this.OpenError,
       context: this
@@ -266,7 +266,7 @@ dredit.Page.prototype.SaveSuccess = function(data, result, xhr) {
 dredit.Page.prototype.Save = function() {
   this.content = this.session.getValue();
   $.ajax({
-      url: '/svc',
+      url: 'svc.php',
       type: 'PUT',
       type: this.IsNew() ? 'POST' : 'PUT',
       success: this.SaveSuccess,
