@@ -297,7 +297,7 @@ public class CredentialMediator {
         }
       }
 
-      if (credential != null && credential.getRefreshToken() == null) {
+      if (credential == null || credential.getRefreshToken() == null) {
         // No refresh token has been retrieved.
         // Start a "fresh" OAuth 2.0 flow so that we can get a refresh token.
         String email = (String) request.getSession().getAttribute(EMAIL_KEY);
