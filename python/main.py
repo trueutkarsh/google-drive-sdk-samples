@@ -102,9 +102,13 @@ class DriveState(object):
     Args:
       state: State query parameter as a string.
     """
-    state_data = json.loads(state)
-    self.action = state_data['action']
-    self.ids = map(str, state_data.get('ids', []))
+    if state:
+      state_data = json.loads(state)
+      self.action = state_data['action']
+      self.ids = map(str, state_data.get('ids', []))
+    else:
+      self.action = 'create'
+      self.ids = []
 
   @classmethod
   def FromRequest(cls, request):
