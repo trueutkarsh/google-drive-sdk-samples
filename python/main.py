@@ -416,7 +416,7 @@ class ServiceHandler(BaseDriveHandler):
         media_body=MediaInMemoryUpload(data.get('content', ''),
                                              data['mimeType']),
       ).execute()
-      # Respond with the new file id as JSON.
+      # Respond with the updated file id as JSON.
       self.RespondJSON(resource['id'])
     except AccessTokenRefreshError:
       # In cases where the access token has expired and cannot be refreshed
