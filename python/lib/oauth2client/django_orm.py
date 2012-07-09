@@ -35,13 +35,15 @@ class CredentialsField(models.Field):
     return "TextField"
 
   def to_python(self, value):
-    if not value:
+    if value is None:
       return None
     if isinstance(value, oauth2client.client.Credentials):
       return value
     return pickle.loads(base64.b64decode(value))
 
   def get_db_prep_value(self, value, connection, prepared=False):
+    if value is None:
+      return None
     return base64.b64encode(pickle.dumps(value))
 
 
@@ -60,6 +62,8 @@ class FlowField(models.Field):
     return pickle.loads(base64.b64decode(value))
 
   def get_db_prep_value(self, value, connection, prepared=False):
+    if value is None:
+      return None
     return base64.b64encode(pickle.dumps(value))
 
 
@@ -112,3 +116,9 @@ class Storage(BaseStorage):
     entity = self.model_class(**args)
     setattr(entity, self.property_name, credentials)
     entity.save()
+
+  def locked_delete(self):
+    """Delete Credentials from the datastore."""
+
+    query = {self.key_name: self.key_value}
+    entities = self.model_class.objects.filter(**query).delete()

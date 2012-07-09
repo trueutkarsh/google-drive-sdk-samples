@@ -58,6 +58,7 @@ def SibPath(name):
 # Create one of these for yourself with, for example:
 # python -c "import os; print os.urandom(64)" > session-secret
 SESSION_SECRET = open(SibPath('session.secret')).read()
+INDEX_HTML = open(SibPath('index.html')).read()
 
 
 class Credentials(db.Model):
@@ -250,6 +251,45 @@ class BaseDriveHandler(webapp.RequestHandler):
     # Perform the redirect.
     self.redirect(uri)
 
+  def RespondJSON(self, data):
+    """Generate a JSON response and return it to the client.
+
+    Args:
+      data: The data that will be converted to JSON to return.
+    """
+    self.response.headers['Content-Type'] = 'application/json'
+    self.response.out.write(json.dumps(data))
+
+  def CreateAuthorizedService(self, service, version):
+    """Create an authorize service instance.
+
+    The service can only ever retrieve the credentials from the session.
+
+    Args:
+      service: Service name (e.g 'drive', 'oauth2').
+      version: Service version (e.g 'v1').
+    Returns:
+      Authorized service or redirect to authorization flow if no credentials.
+    """
+    # For the service, the session holds the credentials
+    creds = self.GetSessionCredentials()
+    if creds:
+      # If the session contains credentials, use them to create a Drive service
+      # instance.
+      return CreateService(service, version, creds)
+    else:
+      # If no credentials could be loaded from the session, redirect the user to
+      # the authorization page.
+      self.RedirectAuth()
+
+  def CreateDrive(self):
+    """Create a drive client instance."""
+    return self.CreateAuthorizedService('drive', 'v2')
+
+  def CreateUserInfo(self):
+    """Create a user info client instance."""
+    return self.CreateAuthorizedService('oauth2', 'v2')
+
 
 class MainPage(BaseDriveHandler):
   """Web handler for the main page.
@@ -266,6 +306,12 @@ class MainPage(BaseDriveHandler):
     been passed or not. If a resource ID has been passed, this is the Open
     With use-case, otherwise it is the Create New use-case.
     """
+    # Generate a state instance for the request, this includes the action, and
+    # the file id(s) that have been sent from the Drive user interface.
+    drive_state = DriveState.FromRequest(self.request)
+    if drive_state.action == 'open' and len(drive_state.ids) > 0:
+      self.redirect('/#edit/%s' % drive_state.ids[0])
+      return
     # Fetch the credentials by extracting an OAuth 2.0 authorization code from
     # the request URL. If the code is not present, redirect to the OAuth 2.0
     # authorization URL.
@@ -277,25 +323,12 @@ class MainPage(BaseDriveHandler):
     # the OAuth flow. You could also store this value as a separate variable
     # somewhere.
     client_id = self.CreateOAuthFlow().client_id.split('.')[0].split('-')[0]
+    self.RenderTemplate()
 
-    # Generate a state instance for the request, this includes the action, and
-    # the file id(s) that have been sent from the Drive user interface.
-    drive_state = DriveState.FromRequest(self.request)
-    if drive_state.action == 'open':
-      file_ids = [str(i) for i in drive_state.ids]
-    else:
-      file_ids = ['']
-    self.RenderTemplate(file_ids=file_ids, client_id=client_id)
-
-  def RenderTemplate(self, **context):
-    """Render a named template in a context.
-
-    Args:
-      name: Template name.
-      context: Keyword arguments to render as template variables.
-    """
+  def RenderTemplate(self):
+    """Render a named template in a context."""
     self.response.headers['Content-Type'] = 'text/html'
-    self.response.out.write(template.render('index.html', context))
+    self.response.out.write(INDEX_HTML)
 
 
 class ServiceHandler(BaseDriveHandler):
@@ -327,8 +360,10 @@ class ServiceHandler(BaseDriveHandler):
       # instance is used to upload the file body.
       resource = service.files().insert(
           body=resource,
-          media_body=MediaInMemoryUpload(data.get('content', ''),
-                                         data['mimeType']),
+          media_body=MediaInMemoryUpload(
+              data.get('content', ''),
+              data['mimeType'],
+              resumable=True)
       ).execute()
       # Respond with the new file id as JSON.
       self.RespondJSON(resource['id'])
@@ -358,7 +393,7 @@ class ServiceHandler(BaseDriveHandler):
       if file_id:
         # Fetch the file metadata by making the service.files().get method of
         # the Drive API.
-        f = service.files().get(id=file_id).execute()
+        f = service.files().get(fileId=file_id).execute()
         downloadUrl = f.get('downloadUrl')
         # If a download URL is provided in the file metadata, use it to make an
         # authorized request to fetch the file ontent. Set this content in the
@@ -394,84 +429,27 @@ class ServiceHandler(BaseDriveHandler):
     data = self.RequestJSON()
     try:
       # Create a new file data structure.
-      resource = {
-        'title': data['title'] or 'Untitled Document',
-        'description': data['description'],
-        'mimeType': data['mimeType'],
-      }
+      content = data.get('content', '')
+      if 'content' in data:
+        data.pop('content')
       # Make an update request to update the file. A MediaInMemoryUpload
       # instance is used to upload the file body. Because of a limitation, this
       # request must be made in two parts, the first to update the metadata, and
       # the second to update the body.
       resource = service.files().update(
-        id=data['resource_id'],
+        fileId=data['resource_id'],
         newRevision=False,
-        body=resource,
-        media_body=None,
+        body=data,
+        media_body=MediaInMemoryUpload(
+            content, data['mimeType'], resumable=True)
       ).execute()
-      resource = service.files().update(
-        id=data['resource_id'],
-        newRevision=True,
-        body=None,
-        media_body=MediaInMemoryUpload(data.get('content', ''),
-                                             data['mimeType']),
-      ).execute()
-      # Respond with the updated file id as JSON.
+      # Respond with the new file id as JSON.
       self.RespondJSON(resource['id'])
     except AccessTokenRefreshError:
       # In cases where the access token has expired and cannot be refreshed
       # (e.g. manual token revoking) redirect the user to the authorization page
       # to authorize.
       self.RedirectAuth()
-
-  def CreateDrive(self):
-    """Create a drive client instance.
-
-    The service can only ever retrieve the credentials from the session.
-    """
-    # For the service, the session holds the credentials
-    creds = self.GetSessionCredentials()
-    if creds:
-      # If the session contains credentials, use them to create a Drive service
-      # instance.
-      return CreateService('drive', 'v1', creds)
-    else:
-      # If no credentials could be loaded from the session, redirect the user to
-      # the authorization page.
-      self.RedirectAuth()
-
-  def RedirectAuth(self):
-    """Redirect a handler to an authorization page.
-
-    Used when a handler fails to fetch credentials suitable for making Drive API
-    requests. The request is redirected to an OAuth 2.0 authorization approval
-    page and on approval, are returned to application.
-
-    Args:
-      handler: webapp.RequestHandler to redirect.
-    """
-    flow = self.CreateOAuthFlow()
-
-    # Manually add the required scopes. Since this redirect does not originate
-    # from the Google Drive UI, which authomatically sets the scopes that are
-    # listed in the API Console.
-    flow.scope = ALL_SCOPES
-
-    # Create the redirect URI by performing step 1 of the OAuth 2.0 web server
-    # flow.
-    uri = flow.step1_get_authorize_url(flow.redirect_uri)
-
-    # Perform the redirect.
-    self.RespondJSON({'redirect': uri})
-
-  def RespondJSON(self, data):
-    """Generate a JSON response and return it to the client.
-
-    Args:
-      data: The data that will be converted to JSON to return.
-    """
-    self.response.headers['Content-Type'] = 'application/json'
-    self.response.out.write(json.dumps(data))
 
   def RequestJSON(self):
     """Load the request body as JSON.
@@ -481,6 +459,48 @@ class ServiceHandler(BaseDriveHandler):
     """
     if self.request.body:
       return json.loads(self.request.body)
+
+
+class UserHandler(BaseDriveHandler):
+  """Web handler for the service to read user information."""
+
+  def get(self):
+    """Called when HTTP GET requests are received by the web application."""
+    # Create a Drive service
+    service = self.CreateUserInfo()
+    if service is None:
+      return
+    try:
+      result = service.userinfo().get().execute()
+      # Generate a JSON response with the file data and return to the client.
+      self.RespondJSON(result)
+    except AccessTokenRefreshError:
+      # Catch AccessTokenRefreshError which occurs when the API client library
+      # fails to refresh a token. This occurs, for example, when a refresh token
+      # is revoked. When this happens the user is redirected to the
+      # Authorization URL.
+      self.RedirectAuth()
+
+
+class AboutHandler(BaseDriveHandler):
+  """Web handler for the service to read user information."""
+
+  def get(self):
+    """Called when HTTP GET requests are received by the web application."""
+    # Create a Drive service
+    service = self.CreateDrive()
+    if service is None:
+      return
+    try:
+      result = service.about().get().execute()
+      # Generate a JSON response with the file data and return to the client.
+      self.RespondJSON(result)
+    except AccessTokenRefreshError:
+      # Catch AccessTokenRefreshError which occurs when the API client library
+      # fails to refresh a token. This occurs, for example, when a refresh token
+      # is revoked. When this happens the user is redirected to the
+      # Authorization URL.
+      self.RedirectAuth()
 
 
 class MediaInMemoryUpload(MediaUpload):
@@ -557,7 +577,8 @@ class MediaInMemoryUpload(MediaUpload):
 
 # Create an WSGI application suitable for running on App Engine
 application = webapp.WSGIApplication(
-    [('/', MainPage), ('/svc', ServiceHandler)],
+    [('/', MainPage), ('/svc', ServiceHandler), ('/about', AboutHandler),
+     ('/user', UserHandler)],
     # XXX Set to False in production.
     debug=True
 )

@@ -31,6 +31,7 @@ import time
 import urllib
 import urlparse
 
+from anyjson import simplejson
 
 HAS_OPENSSL = False
 try:
@@ -41,28 +42,10 @@ try:
 except ImportError:
   pass
 
-try:  # pragma: no cover
-  import simplejson
-except ImportError:  # pragma: no cover
-  try:
-    # Try to import from django, should work on App Engine
-    from django.utils import simplejson
-  except ImportError:
-    # Should work for Python2.6 and higher.
-    import json as simplejson
-
 try:
   from urlparse import parse_qsl
 except ImportError:
   from cgi import parse_qsl
-
-# Determine if we can write to the file system, and if we can use a local file
-# cache behing httplib2.
-if hasattr(os, 'tempnam'):
-  # Put cache file in the director '.cache'.
-  CACHED_HTTP = httplib2.Http('.cache')
-else:
-  CACHED_HTTP = httplib2.Http()
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +54,9 @@ EXPIRY_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
 
 # Which certs to use to validate id_tokens received.
 ID_TOKEN_VERIFICATON_CERTS = 'https://www.googleapis.com/oauth2/v1/certs'
+
+# Constant to use for the out of band OAuth 2.0 flow.
+OOB_CALLBACK_URN = 'urn:ietf:wg:oauth:2.0:oob'
 
 
 class Error(Exception):
@@ -106,6 +92,22 @@ def _abstract():
   raise NotImplementedError('You need to override this function')
 
 
+class MemoryCache(object):
+  """httplib2 Cache implementation which only caches locally."""
+
+  def __init__(self):
+    self.cache = {}
+
+  def get(self, key):
+    return self.cache.get(key)
+
+  def set(self, key, value):
+    self.cache[key] = value
+
+  def delete(self, key):
+    self.cache.pop(key, None)
+
+
 class Credentials(object):
   """Base class for all Credentials objects.
 
@@ -113,7 +115,7 @@ class Credentials(object):
   an HTTP transport.
 
   Subclasses must also specify a classmethod named 'from_json' that takes a JSON
-  string as input and returns an instaniated Crentials object.
+  string as input and returns an instaniated Credentials object.
   """
 
   NON_SERIALIZED_MEMBERS = ['store']
@@ -124,6 +126,23 @@ class Credentials(object):
     replacing http.request() with a method that adds in
     the appropriate headers and then delegates to the original
     Http.request() method.
+    """
+    _abstract()
+
+  def refresh(self, http):
+    """Forces a refresh of the access_token.
+
+    Args:
+      http: httplib2.Http, an http object to be used to make the refresh
+        request.
+    """
+    _abstract()
+
+  def apply(self, headers):
+    """Add the authorization to the headers.
+
+    Args:
+      headers: dict, the headers to add the Authorization header to.
     """
     _abstract()
 
@@ -140,7 +159,8 @@ class Credentials(object):
     t = type(self)
     d = copy.copy(self.__dict__)
     for member in strip:
-      del d[member]
+      if member in d:
+        del d[member]
     if 'token_expiry' in d and isinstance(d['token_expiry'], datetime.datetime):
       d['token_expiry'] = d['token_expiry'].strftime(EXPIRY_FORMAT)
     # Add in information we will need later to reconsistitue this instance.
@@ -172,10 +192,31 @@ class Credentials(object):
     data = simplejson.loads(s)
     # Find and call the right classmethod from_json() to restore the object.
     module = data['_module']
+    try:
+      m = __import__(module)
+    except ImportError:
+      # In case there's an object from the old package structure, update it
+      module = module.replace('.apiclient', '')
+      m = __import__(module)
+
     m = __import__(module, fromlist=module.split('.')[:-1])
     kls = getattr(m, data['_class'])
     from_json = getattr(kls, 'from_json')
     return from_json(s)
+
+  @classmethod
+  def from_json(cls, s):
+    """Instantiate a Credentials object from a JSON description of it.
+
+    The JSON should have been produced by calling .to_json() on the object.
+
+    Args:
+      data: dict, A deserialized JSON object.
+
+    Returns:
+      An instance of a Credentials subclass.
+    """
+    return Credentials()
 
 
 class Flow(object):
@@ -194,7 +235,8 @@ class Storage(object):
   def acquire_lock(self):
     """Acquires any lock necessary to access this Storage.
 
-    This lock is not reentrant."""
+    This lock is not reentrant.
+    """
     pass
 
   def release_lock(self):
@@ -225,6 +267,13 @@ class Storage(object):
     """
     _abstract()
 
+  def locked_delete(self):
+    """Delete a credential.
+
+    The Storage lock must be held when this is called.
+    """
+    _abstract()
+
   def get(self):
     """Retrieve credential.
 
@@ -250,6 +299,21 @@ class Storage(object):
     self.acquire_lock()
     try:
       self.locked_put(credentials)
+    finally:
+      self.release_lock()
+
+  def delete(self):
+    """Delete credential.
+
+    Frees any resources associated with storing the credential.
+    The Storage lock must *not* be held when this is called.
+
+    Returns:
+      None
+    """
+    self.acquire_lock()
+    try:
+      return self.locked_delete()
     finally:
       self.release_lock()
 
@@ -299,6 +363,92 @@ class OAuth2Credentials(Credentials):
     # True if the credentials have been revoked or expired and can't be
     # refreshed.
     self.invalid = False
+
+  def authorize(self, http):
+    """Authorize an httplib2.Http instance with these credentials.
+
+    The modified http.request method will add authentication headers to each
+    request and will refresh access_tokens when a 401 is received on a
+    request. In addition the http.request method has a credentials property,
+    http.request.credentials, which is the Credentials object that authorized
+    it.
+
+    Args:
+       http: An instance of httplib2.Http
+           or something that acts like it.
+
+    Returns:
+       A modified instance of http that was passed in.
+
+    Example:
+
+      h = httplib2.Http()
+      h = credentials.authorize(h)
+
+    You can't create a new OAuth subclass of httplib2.Authenication
+    because it never gets passed the absolute URI, which is needed for
+    signing. So instead we have to overload 'request' with a closure
+    that adds in the Authorization header and then calls the original
+    version of 'request()'.
+    """
+    request_orig = http.request
+
+    # The closure that will replace 'httplib2.Http.request'.
+    def new_request(uri, method='GET', body=None, headers=None,
+                    redirections=httplib2.DEFAULT_MAX_REDIRECTS,
+                    connection_type=None):
+      if not self.access_token:
+        logger.info('Attempting refresh to obtain initial access_token')
+        self._refresh(request_orig)
+
+      # Modify the request headers to add the appropriate
+      # Authorization header.
+      if headers is None:
+        headers = {}
+      self.apply(headers)
+
+      if self.user_agent is not None:
+        if 'user-agent' in headers:
+          headers['user-agent'] = self.user_agent + ' ' + headers['user-agent']
+        else:
+          headers['user-agent'] = self.user_agent
+
+      resp, content = request_orig(uri, method, body, headers,
+                                   redirections, connection_type)
+
+      if resp.status == 401:
+        logger.info('Refreshing due to a 401')
+        self._refresh(request_orig)
+        self.apply(headers)
+        return request_orig(uri, method, body, headers,
+                            redirections, connection_type)
+      else:
+        return (resp, content)
+
+    # Replace the request method with our own closure.
+    http.request = new_request
+
+    # Set credentials as a property of the request method.
+    setattr(http.request, 'credentials', self)
+
+    return http
+
+  def refresh(self, http):
+    """Forces a refresh of the access_token.
+
+    Args:
+      http: httplib2.Http, an http object to be used to make the refresh
+        request.
+    """
+    self._refresh(http.request)
+
+  def apply(self, headers):
+    """Add the authorization to the headers.
+
+    Args:
+      headers: dict, the headers to add the Authorization header to.
+    """
+    headers['Authorization'] = 'Bearer ' + self.access_token
 
   def to_json(self):
     return self._to_json(Credentials.NON_SERIALIZED_MEMBERS)
@@ -407,6 +557,13 @@ class OAuth2Credentials(Credentials):
     This method first checks by reading the Storage object if available.
     If a refresh is still needed, it holds the Storage lock until the
     refresh is completed.
+
+    Args:
+      http_request: callable, a callable that matches the method signature of
+        httplib2.Http.request, used to make the refresh request.
+
+    Raises:
+      AccessTokenRefreshError: When the refresh fails.
     """
     if not self.store:
       self._do_refresh_request(http_request)
@@ -427,8 +584,8 @@ class OAuth2Credentials(Credentials):
     """Refresh the access_token using the refresh_token.
 
     Args:
-       http: An instance of httplib2.Http.request
-           or something that acts like it.
+      http_request: callable, a callable that matches the method signature of
+        httplib2.Http.request, used to make the refresh request.
 
     Raises:
       AccessTokenRefreshError: When the refresh fails.
@@ -436,7 +593,7 @@ class OAuth2Credentials(Credentials):
     body = self._generate_refresh_request_body()
     headers = self._generate_refresh_request_headers()
 
-    logger.info('Refresing access_token')
+    logger.info('Refreshing access_token')
     resp, content = http_request(
         self.token_uri, method='POST', body=body, headers=headers)
     if resp.status == 200:
@@ -454,7 +611,7 @@ class OAuth2Credentials(Credentials):
     else:
       # An {'error':...} response body means the token is expired or revoked,
       # so we flag the credentials as such.
-      logger.error('Failed to retrieve access token: %s' % content)
+      logger.info('Failed to retrieve access token: %s' % content)
       error_msg = 'Invalid response %s.' % resp['status']
       try:
         d = simplejson.loads(content)
@@ -466,66 +623,6 @@ class OAuth2Credentials(Credentials):
       except:
         pass
       raise AccessTokenRefreshError(error_msg)
-
-  def authorize(self, http):
-    """Authorize an httplib2.Http instance with these credentials.
-
-    Args:
-       http: An instance of httplib2.Http
-           or something that acts like it.
-
-    Returns:
-       A modified instance of http that was passed in.
-
-    Example:
-
-      h = httplib2.Http()
-      h = credentials.authorize(h)
-
-    You can't create a new OAuth subclass of httplib2.Authenication
-    because it never gets passed the absolute URI, which is needed for
-    signing. So instead we have to overload 'request' with a closure
-    that adds in the Authorization header and then calls the original
-    version of 'request()'.
-    """
-    request_orig = http.request
-
-    # The closure that will replace 'httplib2.Http.request'.
-    def new_request(uri, method='GET', body=None, headers=None,
-                    redirections=httplib2.DEFAULT_MAX_REDIRECTS,
-                    connection_type=None):
-      if not self.access_token:
-        logger.info('Attempting refresh to obtain initial access_token')
-        self._refresh(request_orig)
-
-      # Modify the request headers to add the appropriate
-      # Authorization header.
-      if headers is None:
-        headers = {}
-      headers['authorization'] = 'OAuth ' + self.access_token
-
-      if self.user_agent is not None:
-        if 'user-agent' in headers:
-          headers['user-agent'] = self.user_agent + ' ' + headers['user-agent']
-        else:
-          headers['user-agent'] = self.user_agent
-      import logging
-      logging.info(str(uri))
-      logging.info(str(headers))
-      resp, content = request_orig(uri, method, body, headers,
-                                   redirections, connection_type)
-
-      if resp.status == 401:
-        logger.info('Refreshing due to a 401')
-        self._refresh(request_orig)
-        headers['authorization'] = 'OAuth ' + self.access_token
-        return request_orig(uri, method, body, headers,
-                            redirections, connection_type)
-      else:
-        return (resp, content)
-
-    http.request = new_request
-    return http
 
 
 class AccessTokenCredentials(OAuth2Credentials):
@@ -718,12 +815,15 @@ if HAS_OPENSSL:
           'iss': self.service_account_name
       }
       payload.update(self.kwargs)
-      logging.debug(str(payload))
+      logger.debug(str(payload))
 
       return make_signed_jwt(
           Signer.from_string(self.private_key, self.private_key_password),
           payload)
 
+  # Only used in verify_id_token(), which is always calling to the same URI
+  # for the certs.
+  _cached_http = httplib2.Http(MemoryCache())
 
   def verify_id_token(id_token, audience, http=None,
       cert_uri=ID_TOKEN_VERIFICATON_CERTS):
@@ -744,7 +844,7 @@ if HAS_OPENSSL:
       oauth2client.crypt.AppIdentityError if the JWT fails to verify.
     """
     if http is None:
-      http = CACHED_HTTP
+      http = _cached_http
 
     resp, content = http.request(cert_uri)
 
@@ -780,6 +880,78 @@ def _extract_id_token(id_token):
       'Wrong number of segments in token: %s' % id_token)
 
   return simplejson.loads(_urlsafe_b64decode(segments[1]))
+
+def credentials_from_code(client_id, client_secret, scope, code,
+                        redirect_uri = 'postmessage',
+                        http=None, user_agent=None,
+                        token_uri='https://accounts.google.com/o/oauth2/token'):
+  """Exchanges an authorization code for an OAuth2Credentials object.
+
+  Args:
+    client_id: string, client identifier.
+    client_secret: string, client secret.
+    scope: string or list of strings, scope(s) to request.
+    code: string, An authroization code, most likely passed down from
+      the client
+    redirect_uri: string, this is generally set to 'postmessage' to match the
+      redirect_uri that the client specified
+    http: httplib2.Http, optional http instance to use to do the fetch
+    token_uri: string, URI for token endpoint. For convenience
+      defaults to Google's endpoints but any OAuth 2.0 provider can be used.
+  Returns:
+    An OAuth2Credentials object.
+
+  Raises:
+    FlowExchangeError if the authorization code cannot be exchanged for an
+     access token
+  """
+  flow = OAuth2WebServerFlow(client_id, client_secret, scope, user_agent,
+                             'https://accounts.google.com/o/oauth2/auth',
+                             token_uri)
+
+  # We primarily make this call to set up the redirect_uri in the flow object
+  uriThatWeDontReallyUse = flow.step1_get_authorize_url(redirect_uri)
+  credentials = flow.step2_exchange(code, http)
+  return credentials
+
+
+def credentials_from_clientsecrets_and_code(filename, scope, code,
+                                            message = None,
+                                            redirect_uri = 'postmessage',
+                                            http=None):
+  """Returns OAuth2Credentials from a clientsecrets file and an auth code.
+
+  Will create the right kind of Flow based on the contents of the clientsecrets
+  file or will raise InvalidClientSecretsError for unknown types of Flows.
+
+  Args:
+    filename: string, File name of clientsecrets.
+    scope: string or list of strings, scope(s) to request.
+    code: string, An authroization code, most likely passed down from
+      the client
+    message: string, A friendly string to display to the user if the
+      clientsecrets file is missing or invalid. If message is provided then
+      sys.exit will be called in the case of an error. If message in not
+      provided then clientsecrets.InvalidClientSecretsError will be raised.
+    redirect_uri: string, this is generally set to 'postmessage' to match the
+      redirect_uri that the client specified
+    http: httplib2.Http, optional http instance to use to do the fetch
+
+  Returns:
+    An OAuth2Credentials object.
+
+  Raises:
+    FlowExchangeError if the authorization code cannot be exchanged for an
+     access token
+    UnknownClientSecretsFlowError if the file describes an unknown kind of Flow.
+    clientsecrets.InvalidClientSecretsError if the clientsecrets file is
+      invalid.
+  """
+  flow = flow_from_clientsecrets(filename, scope, message)
+  # We primarily make this call to set up the redirect_uri in the flow object
+  uriThatWeDontReallyUse = flow.step1_get_authorize_url(redirect_uri)
+  credentials = flow.step2_exchange(code, http)
+  return credentials
 
 
 class OAuth2WebServerFlow(Flow):
@@ -821,15 +993,15 @@ class OAuth2WebServerFlow(Flow):
     self.params.update(kwargs)
     self.redirect_uri = None
 
-  def step1_get_authorize_url(self, redirect_uri='oob'):
+  def step1_get_authorize_url(self, redirect_uri=OOB_CALLBACK_URN):
     """Returns a URI to redirect to the provider.
 
     Args:
-      redirect_uri: string, Either the string 'oob' for a non-web-based
-                    application, or a URI that handles the callback from
-                    the authorization server.
+      redirect_uri: string, Either the string 'urn:ietf:wg:oauth:2.0:oob' for
+          a non-web-based application, or a URI that handles the callback from
+          the authorization server.
 
-    If redirect_uri is 'oob' then pass in the
+    If redirect_uri is 'urn:ietf:wg:oauth:2.0:oob' then pass in the
     generated verification code to step2_exchange,
     otherwise pass in the query parameters received
     at the callback uri to step2_exchange.
@@ -856,10 +1028,24 @@ class OAuth2WebServerFlow(Flow):
         of the query parameters to the redirect_uri, which contains
         the code.
       http: httplib2.Http, optional http instance to use to do the fetch
+
+    Returns:
+      An OAuth2Credentials object that can be used to authorize requests.
+
+    Raises:
+      FlowExchangeError if a problem occured exchanging the code for a
+      refresh_token.
     """
 
     if not (isinstance(code, str) or isinstance(code, unicode)):
-      code = code['code']
+      if 'code' not in code:
+        if 'error' in code:
+          error_msg = code['error']
+        else:
+          error_msg = 'No code was supplied in the query parameters.'
+        raise FlowExchangeError(error_msg)
+      else:
+        code = code['code']
 
     body = urllib.urlencode({
         'grant_type': 'authorization_code',
@@ -900,7 +1086,7 @@ class OAuth2WebServerFlow(Flow):
                                self.token_uri, self.user_agent,
                                id_token=d.get('id_token', None))
     else:
-      logger.error('Failed to retrieve access token: %s' % content)
+      logger.info('Failed to retrieve access token: %s' % content)
       error_msg = 'Invalid response %s.' % resp['status']
       try:
         d = simplejson.loads(content)
