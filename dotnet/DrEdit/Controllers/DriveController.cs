@@ -19,7 +19,7 @@ using System.Web;
 using System.Web.Mvc;
 using System.Web.Script.Serialization;
 using DrEdit.Models;
-using Google.Apis.Drive.v1;
+using Google.Apis.Drive.v2;
 using Google.Apis.Authentication;
 
 namespace DrEdit.Controllers

@@ -18,7 +18,7 @@ using System.Linq;
 using System.Web;
 using System.Web.Mvc;
 using Google.Apis.Authentication;
-using Google.Apis.Drive.v1;
+using Google.Apis.Drive.v2;
 using DrEdit.Models;
 
 namespace DrEdit.Controllers
@@ -43,7 +43,7 @@ namespace DrEdit.Controllers
                 // redirect user to authentication
             }
 
-            Google.Apis.Drive.v1.Data.File file = service.Files.Get(file_id).Fetch();
+            Google.Apis.Drive.v2.Data.File file = service.Files.Get(file_id).Fetch();
             string data = Utils.DownloadFile(authenticator, file.DownloadUrl);
             DriveFile df = new DriveFile(file, data);
             return Json(df, JsonRequestBehavior.AllowGet);
@@ -55,7 +55,7 @@ namespace DrEdit.Controllers
         [HttpPost, ActionName("svc")]
         public JsonResult svcPost(string title, string description, string mimeType, string content)
         {
-            Authenticator authenticator = Session["authenticator"] as Authenticator;
+            IAuthenticator authenticator = Session["authenticator"] as IAuthenticator;
             DriveService service = Session["service"] as DriveService;
 
             if (authenticator == null || service == null)
@@ -63,17 +63,17 @@ namespace DrEdit.Controllers
                 // redirect user to authentication
             }
 
-            Google.Apis.Drive.v1.Data.File file = Utils.InsertResource(service, authenticator, title, description, mimeType, content);
-            return Json(file.Id, JsonRequestBehavior.AllowGet);
+            Google.Apis.Drive.v2.Data.File file = Utils.InsertResource(service, authenticator, title, description, mimeType, content);
+            return Json(file.Id);
         }
 
         //
         // PUT: /svc
 
         [HttpPut, ActionName("svc")]
-        public JsonResult svcPut(string title, string description, string mimeType, string content, string resource_id)
+        public JsonResult svcPut(string title, string description, string mimeType, string content, string resource_id, bool newRevision)
         {
-            Authenticator authenticator = Session["authenticator"] as Authenticator;
+            IAuthenticator authenticator = Session["authenticator"] as IAuthenticator;
             DriveService service = Session["service"] as DriveService;
 
             if (authenticator == null || service == null)
@@ -81,17 +81,16 @@ namespace DrEdit.Controllers
                 // redirect user to authentication
             }
 
-            Google.Apis.Drive.v1.Data.File file;
+            Google.Apis.Drive.v2.Data.File file;
             if (string.IsNullOrWhiteSpace(resource_id))
             {
                 file = Utils.InsertResource(service, authenticator, title, description, mimeType, content);
             }
             else
             {
-                file = Utils.UpdateResource(service, authenticator, resource_id, title, description, mimeType, content, true);
+                file = Utils.UpdateResource(service, authenticator, resource_id, title, description, mimeType, content, newRevision);
             }
-            return Json(file.Id, JsonRequestBehavior.AllowGet);
+            return Json(file.Id);
         }
-
     }
 }

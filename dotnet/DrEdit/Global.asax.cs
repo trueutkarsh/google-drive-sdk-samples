@@ -44,6 +44,18 @@ namespace DrEdit
             );
 
             routes.MapRoute(
+                "user", // Route name
+                "user", // URL with parameters
+                new { controller = "user", action = "user" } // Parameter defaults
+            );
+
+            routes.MapRoute(
+                "about", // Route name
+                "about", // URL with parameters
+                new { controller = "about", action = "about" } // Parameter defaults
+            );
+
+            routes.MapRoute(
                 "Default", // Route name
                 "{controller}/{action}/{id}", // URL with parameters
                 new { controller = "Drive", action = "Index", id = UrlParameter.Optional } // Parameter defaults
