@@ -28,8 +28,8 @@ import gflags
 import logging
 import urllib
 
-from anyjson import simplejson
 from errors import HttpError
+from oauth2client.anyjson import simplejson
 
 FLAGS = gflags.FLAGS
 
@@ -280,6 +280,25 @@ class RawModel(JsonModel):
   accept = '*/*'
   content_type = 'application/json'
   alt_param = None
+
+  def deserialize(self, content):
+    return content
+
+  @property
+  def no_content_response(self):
+    return ''
+
+
+class MediaModel(JsonModel):
+  """Model class for requests that return Media.
+
+  Serializes and de-serializes between JSON and the Python
+  object representation of HTTP request, and returns the raw bytes
+  of the response body.
+  """
+  accept = '*/*'
+  content_type = 'application/json'
+  alt_param = 'media'
 
   def deserialize(self, content):
     return content

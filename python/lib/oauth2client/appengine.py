@@ -25,18 +25,9 @@ import logging
 import pickle
 import time
 
-try: # pragma: no cover
-  import simplejson
-except ImportError: # pragma: no cover
-  try:
-    # Try to import from django, should work on App Engine
-    from django.utils import simplejson
-  except ImportError:
-    # Should work for Python2.6 and higher.
-    import json as simplejson
-
 import clientsecrets
 
+from anyjson import simplejson
 from client import AccessTokenRefreshError
 from client import AssertionCredentials
 from client import Credentials
@@ -45,7 +36,7 @@ from client import OAuth2WebServerFlow
 from client import Storage
 from google.appengine.api import memcache
 from google.appengine.api import users
-from google.appengine.api.app_identity import app_identity
+from google.appengine.api import app_identity
 from google.appengine.ext import db
 from google.appengine.ext import webapp
 from google.appengine.ext.webapp.util import login_required
@@ -65,75 +56,52 @@ class AppAssertionCredentials(AssertionCredentials):
   This object will allow an App Engine application to identify itself to Google
   and other OAuth 2.0 servers that can verify assertions. It can be used for
   the purpose of accessing data stored under an account assigned to the App
-  Engine application itself. The algorithm used for generating the assertion is
-  the Signed JSON Web Token (JWT) algorithm. Additional details can be found at
-  the following link:
-
-  http://self-issued.info/docs/draft-jones-json-web-token.html
+  Engine application itself.
 
   This credential does not require a flow to instantiate because it represents
   a two legged flow, and therefore has all of the required information to
   generate and refresh its own access tokens.
-
   """
 
-  def __init__(self, scope,
-      audience='https://accounts.google.com/o/oauth2/token',
-      assertion_type='http://oauth.net/grant_type/jwt/1.0/bearer',
-      token_uri='https://accounts.google.com/o/oauth2/token', **kwargs):
+  def __init__(self, scope, **kwargs):
     """Constructor for AppAssertionCredentials
 
     Args:
-      scope: string, scope of the credentials being requested.
-      audience: string, The audience, or verifier of the assertion.  For
-        convenience defaults to Google's audience.
-      assertion_type: string, Type name that will identify the format of the
-        assertion string.  For convience, defaults to the JSON Web Token (JWT)
-        assertion type string.
-      token_uri: string, URI for token endpoint. For convenience
-        defaults to Google's endpoints but any OAuth 2.0 provider can be used.
+      scope: string or list of strings, scope(s) of the credentials being requested.
     """
+    if type(scope) is list:
+      scope = ' '.join(scope)
     self.scope = scope
-    self.audience = audience
-    self.app_name = app_identity.get_service_account_name()
 
     super(AppAssertionCredentials, self).__init__(
-        assertion_type,
         None,
-        token_uri)
+        None,
+        None)
 
   @classmethod
   def from_json(cls, json):
     data = simplejson.loads(json)
-    retval = AccessTokenCredentials(
-        data['scope'],
-        data['audience'],
-        data['assertion_type'],
-        data['token_uri'])
-    return retval
+    return AppAssertionCredentials(data['scope'])
 
-  def _generate_assertion(self):
-    header = {
-      'typ': 'JWT',
-      'alg': 'RS256',
-    }
+  def _refresh(self, http_request):
+    """Refreshes the access_token.
 
-    now = int(time.time())
-    claims = {
-      'aud': self.audience,
-      'scope': self.scope,
-      'iat': now,
-      'exp': now + 3600,
-      'iss': self.app_name,
-    }
+    Since the underlying App Engine app_identity implementation does its own
+    caching we can skip all the storage hoops and just to a refresh using the
+    API.
 
-    jwt_components = [base64.b64encode(simplejson.dumps(seg))
-        for seg in [header, claims]]
+    Args:
+      http_request: callable, a callable that matches the method signature of
+        httplib2.Http.request, used to make the refresh request.
 
-    base_str = ".".join(jwt_components)
-    key_name, signature = app_identity.sign_blob(base_str)
-    jwt_components.append(base64.b64encode(signature))
-    return ".".join(jwt_components)
+    Raises:
+      AccessTokenRefreshError: When the refresh fails.
+    """
+    try:
+      (token, _) = app_identity.get_access_token(self.scope)
+    except app_identity.Error, e:
+      raise AccessTokenRefreshError(str(e))
+    self.access_token = token
 
 
 class FlowProperty(db.Property):
@@ -256,7 +224,7 @@ class StorageByKeyName(Storage):
       if credential and hasattr(credential, 'set_store'):
         credential.set_store(self)
         if self._cache:
-          self._cache.set(self._key_name, credentials.to_json())
+          self._cache.set(self._key_name, credential.to_json())
 
     return credential
 
@@ -271,6 +239,16 @@ class StorageByKeyName(Storage):
     entity.put()
     if self._cache:
       self._cache.set(self._key_name, credentials.to_json())
+
+  def locked_delete(self):
+    """Delete Credential from datastore."""
+
+    if self._cache:
+      self._cache.delete(self._key_name)
+
+    entity = self._model.get_by_key_name(self._key_name)
+    if entity is not None:
+      entity.delete()
 
 
 class CredentialsModel(db.Model):
@@ -308,7 +286,8 @@ class OAuth2Decorator(object):
   def __init__(self, client_id, client_secret, scope,
                auth_uri='https://accounts.google.com/o/oauth2/auth',
                token_uri='https://accounts.google.com/o/oauth2/token',
-               message=None):
+               user_agent=None,
+               message=None, **kwargs):
 
     """Constructor for OAuth2Decorator
 
@@ -321,12 +300,15 @@ class OAuth2Decorator(object):
         defaults to Google's endpoints but any OAuth 2.0 provider can be used.
       token_uri: string, URI for token endpoint. For convenience
         defaults to Google's endpoints but any OAuth 2.0 provider can be used.
+      user_agent: string, User agent of your application, default to None.
       message: Message to display if there are problems with the OAuth 2.0
         configuration. The message may contain HTML and will be presented on the
         web interface for any method that uses the decorator.
+      **kwargs: dict, Keyword arguments are be passed along as kwargs to the
+        OAuth2WebServerFlow constructor.
     """
-    self.flow = OAuth2WebServerFlow(client_id, client_secret, scope, None,
-        auth_uri, token_uri)
+    self.flow = OAuth2WebServerFlow(client_id, client_secret, scope, user_agent,
+        auth_uri, token_uri, **kwargs)
     self.credentials = None
     self._request_handler = None
     self._message = message
@@ -348,7 +330,7 @@ class OAuth2Decorator(object):
         instance.
     """
 
-    def check_oauth(request_handler, *args):
+    def check_oauth(request_handler, *args, **kwargs):
       if self._in_error:
         self._display_error_message(request_handler)
         return
@@ -368,7 +350,7 @@ class OAuth2Decorator(object):
       if not self.has_credentials():
         return request_handler.redirect(self.authorize_url())
       try:
-        method(request_handler, *args)
+        method(request_handler, *args, **kwargs)
       except AccessTokenRefreshError:
         return request_handler.redirect(self.authorize_url())
 
@@ -388,7 +370,7 @@ class OAuth2Decorator(object):
         instance.
     """
 
-    def setup_oauth(request_handler, *args):
+    def setup_oauth(request_handler, *args, **kwargs):
       if self._in_error:
         self._display_error_message(request_handler)
         return
@@ -405,7 +387,7 @@ class OAuth2Decorator(object):
       self._request_handler = request_handler
       self.credentials = StorageByKeyName(
           CredentialsModel, user.user_id(), 'credentials').get()
-      method(request_handler, *args)
+      method(request_handler, *args, **kwargs)
     return setup_oauth
 
   def has_credentials(self):
@@ -427,7 +409,7 @@ class OAuth2Decorator(object):
     user = users.get_current_user()
     memcache.set(user.user_id(), pickle.dumps(self.flow),
                  namespace=OAUTH2CLIENT_NAMESPACE)
-    return url
+    return str(url)
 
   def http(self):
     """Returns an authorized http instance.
@@ -466,7 +448,8 @@ class OAuth2DecoratorFromClientSecrets(OAuth2Decorator):
 
     Args:
       filename: string, File name of client secrets.
-      scope: string, Space separated list of scopes.
+      scope: string or list of strings, scope(s) of the credentials being
+        requested.
       message: string, A friendly string to display to the user if the
         clientsecrets file is missing or invalid. The message may contain HTML and
         will be presented on the web interface for any method that uses the
@@ -497,7 +480,8 @@ def oauth2decorator_from_clientsecrets(filename, scope, message=None):
 
   Args:
     filename: string, File name of client secrets.
-    scope: string, Space separated list of scopes.
+    scope: string or list of strings, scope(s) of the credentials being
+      requested.
     message: string, A friendly string to display to the user if the
       clientsecrets file is missing or invalid. The message may contain HTML and
       will be presented on the web interface for any method that uses the
