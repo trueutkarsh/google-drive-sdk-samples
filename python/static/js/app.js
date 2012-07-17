@@ -13,7 +13,7 @@ google.load('picker', '1');
 
 angular.module('app', ['app.filters', 'app.services', 'app.directives'])
     .constant('saveInterval', 15000)
-    .constant('appId', [[YOUR_APP_ID]])
+    .constant('appId', [[YOUR_APP_ID]]) // Please replace this with your Application ID.
     .config(['$routeProvider', function ($routeProvider) {
     $routeProvider
         .when('/edit/:id', {templateUrl:'partials/editor.html', controller:EditorCtrl})
