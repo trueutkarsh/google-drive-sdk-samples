@@ -18,8 +18,6 @@ import com.google.drive.samples.dredit.model.State;
 import com.google.gson.Gson;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -30,7 +28,9 @@ import javax.servlet.http.HttpServletResponse;
  * start page for DrEdit.
  *
  * @author vicfryzel@google.com (Vic Fryzel)
+ * @author nivco@google.com (Nicolas Garnier)
  */
+@SuppressWarnings("serial")
 public class StartPageServlet extends DrEditServlet {
   /**
    * Ensure that the user is authorized, and setup the required values for
@@ -39,19 +39,20 @@ public class StartPageServlet extends DrEditServlet {
   @Override
   public void doGet(HttpServletRequest req, HttpServletResponse resp)
       throws IOException, ServletException {
+	// Making sure the code gets processed
+    req.setAttribute("client_id", new Gson().toJson(getClientId(req, resp)));
     // Deserialize the state in order to specify some values to the DrEdit
     // JavaScript client below.
-    Collection<String> ids = new ArrayList<String>();
-    // Assume an empty ID in the list if no IDs were set.
-    ids.add("");
     if (req.getParameter("state") != null) {
       State state = new State(req.getParameter("state"));
       if (state.ids != null && state.ids.size() > 0) {
-        ids = state.ids;
+        resp.sendRedirect("/#/edit/" + state.ids.toArray()[0]);
+        return;
+      } else if (state.parentId != null) {
+        resp.sendRedirect("/#/create/" + state.parentId);
+        return;
       }
     }
-    req.setAttribute("ids", new Gson().toJson(ids).toString());
-    req.setAttribute("client_id", new Gson().toJson(getClientId(req, resp)));
-    req.getRequestDispatcher("/index.jsp").forward(req, resp);
+    req.getRequestDispatcher("/WEB-INF/templates/index.jsp").forward(req, resp);
   }
 }

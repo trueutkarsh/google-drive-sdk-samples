@@ -133,8 +133,9 @@ public class CredentialMediator {
    *
    * @param userId User's Google ID.
    * @return Stored GoogleCredential if found, {@code null} otherwise.
+   * @throws IOException 
    */
-  private Credential getStoredCredential(String userId) {
+  private Credential getStoredCredential(String userId) throws IOException {
     Credential credential = buildEmptyCredential();
     if(credentialStore.load(userId, credential)) {
       return credential;
@@ -146,8 +147,9 @@ public class CredentialMediator {
    * Deletes stored credentials for the provided email address.
    *
    * @param userId User's Google ID.
+   * @throws IOException 
    */
-  private void deleteStoredCredential(String userId) {
+  private void deleteStoredCredential(String userId) throws IOException {
     if (userId != null) {
       Credential credential = getStoredCredential(userId);
       credentialStore.delete(userId, credential);
@@ -197,8 +199,7 @@ public class CredentialMediator {
 
     // Create a user info service, and make a request to get the user's info.
     Oauth2 userInfoService =
-        Oauth2.builder(TRANSPORT, JSON_FACTORY)
-            .setHttpRequestInitializer(credential).build();
+        new Oauth2.Builder(TRANSPORT, JSON_FACTORY, credential).build();
     try {
       userInfo = userInfoService.userinfo().get().execute();
       if (userInfo == null) {
@@ -242,8 +243,9 @@ public class CredentialMediator {
 
   /**
    * Deletes the credential of the active session.
+   * @throws IOException 
    */
-  public void deleteActiveCredential() {
+  public void deleteActiveCredential() throws IOException {
     String userId = (String) request.getSession().getAttribute(USER_ID_KEY);
     this.deleteStoredCredential(userId);
   }
@@ -263,8 +265,9 @@ public class CredentialMediator {
    * @return Credential containing an access and refresh token.
    * @throws NoRefreshTokenException No refresh token could be retrieved from
    *         the available sources.
+   * @throws IOException 
    */
-  public Credential getActiveCredential() throws NoRefreshTokenException {
+  public Credential getActiveCredential() throws NoRefreshTokenException, IOException {
     String userId = (String) request.getSession().getAttribute(USER_ID_KEY);
     Credential credential = null;
     try {
@@ -324,7 +327,8 @@ public class CredentialMediator {
   /**
    * Exception thrown when no refresh token has been found.
    */
-  public static class NoRefreshTokenException extends Exception {
+  @SuppressWarnings("serial")
+public static class NoRefreshTokenException extends Exception {
 
     /**
      * Authorization URL to which to redirect the user.
@@ -351,6 +355,7 @@ public class CredentialMediator {
   /**
    * Exception thrown when client_secrets.json is missing or invalid.
    */
+  @SuppressWarnings("serial")
   public static class InvalidClientSecretsException extends Exception {
     /**
      * Construct an InvalidClientSecretsException with a message.
@@ -365,10 +370,12 @@ public class CredentialMediator {
   /**
    * Exception thrown when no email address could be retrieved.
    */
+  @SuppressWarnings("serial")
   private static class NoUserIdException extends Exception {}
 
   /**
    * Exception thrown when a code exchange has failed.
    */
+  @SuppressWarnings("serial")
   private static class CodeExchangeException extends Exception {}
 }

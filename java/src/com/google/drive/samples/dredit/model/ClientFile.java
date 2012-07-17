@@ -15,10 +15,13 @@
 package com.google.drive.samples.dredit.model;
 
 import com.google.api.services.drive.model.File;
+import com.google.api.services.drive.model.ParentReference;
+import com.google.api.services.drive.model.File.Labels;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 import java.io.Reader;
+import java.util.List;
 
 /**
  * An object representing a File and its content, for use while interacting
@@ -26,6 +29,7 @@ import java.io.Reader;
  * Gson.
  *
  * @author vicfryzel@google.com (Vic Fryzel)
+ * @author nivco@google.com (Nicolas Garnier)
  */
 public class ClientFile {
   /**
@@ -54,6 +58,21 @@ public class ClientFile {
   public String content;
 
   /**
+   * Is the file editable.
+   */
+  public boolean editable;
+
+  /**
+   * Labels.
+   */
+  public Labels labels;
+
+  /**
+   * parents.
+   */
+  public List<ParentReference> parents;
+
+  /**
    * Empty constructor required by Gson.
    */
   public ClientFile() {}
@@ -67,6 +86,9 @@ public class ClientFile {
     this.description = file.getDescription();
     this.mimeType = file.getMimeType();
     this.content = content;
+    this.labels = file.getLabels();
+    this.editable = file.getEditable();
+    this.parents = file.getParents();
   }
 
   /**
@@ -83,6 +105,9 @@ public class ClientFile {
     this.description = other.description;
     this.mimeType = other.mimeType;
     this.content = other.content;
+    this.labels = other.labels;
+    this.editable = other.editable;
+    this.parents = other.parents;
   }
 
   /**
@@ -101,6 +126,9 @@ public class ClientFile {
     file.setTitle(this.title);
     file.setDescription(this.description);
     file.setMimeType(this.mimeType);
+    file.setLabels(labels);
+    file.setEditable(editable);
+    file.setParents(parents);
     return file;
   }
 }
