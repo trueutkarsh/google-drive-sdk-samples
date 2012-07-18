@@ -160,7 +160,7 @@ get '/' do
   @state = state
   @file_ids = (state['ids'] || [''])
   @app_id = settings.app_id
-  erb :index
+  redir 'index.html'
 end
 
 ###
