@@ -19,7 +19,10 @@ A client library for Google's discovery based APIs.
 
 __author__ = 'jcgregorio@google.com (Joe Gregorio)'
 __all__ = [
-    'build', 'build_from_document'
+    'build',
+    'build_from_document'
+    'fix_method_name',
+    'key2param'
     ]
 
 import copy
@@ -39,7 +42,6 @@ try:
 except ImportError:
     from cgi import parse_qsl
 
-from apiclient.anyjson import simplejson
 from apiclient.errors import HttpError
 from apiclient.errors import InvalidJsonError
 from apiclient.errors import MediaUploadSizeError
@@ -50,11 +52,14 @@ from apiclient.http import HttpRequest
 from apiclient.http import MediaFileUpload
 from apiclient.http import MediaUpload
 from apiclient.model import JsonModel
+from apiclient.model import MediaModel
 from apiclient.model import RawModel
 from apiclient.schema import Schemas
 from email.mime.multipart import MIMEMultipart
 from email.mime.nonmultipart import MIMENonMultipart
+from oauth2client.anyjson import simplejson
 
+logger = logging.getLogger(__name__)
 
 URITEMPLATE = re.compile('{[^}]*}')
 VARNAME = re.compile('[a-zA-Z0-9_-]+')
@@ -62,30 +67,35 @@ DISCOVERY_URI = ('https://www.googleapis.com/discovery/v1/apis/'
   '{api}/{apiVersion}/rest')
 DEFAULT_METHOD_DOC = 'A description of how to use this function'
 
-# Query parameters that work, but don't appear in discovery
-STACK_QUERY_PARAMETERS = ['trace', 'fields', 'pp', 'prettyPrint', 'userIp',
-  'userip', 'strict']
+# Parameters accepted by the stack, but not visible via discovery.
+STACK_QUERY_PARAMETERS = ['trace', 'pp', 'userip', 'strict']
 
+# Python reserved words.
 RESERVED_WORDS = ['and', 'assert', 'break', 'class', 'continue', 'def', 'del',
                   'elif', 'else', 'except', 'exec', 'finally', 'for', 'from',
                   'global', 'if', 'import', 'in', 'is', 'lambda', 'not', 'or',
                   'pass', 'print', 'raise', 'return', 'try', 'while' ]
 
 
-def _fix_method_name(name):
+def fix_method_name(name):
+  """Fix method names to avoid reserved word conflicts.
+
+  Args:
+    name: string, method name.
+
+  Returns:
+    The name with a '_' prefixed if the name is a reserved word.
+  """
   if name in RESERVED_WORDS:
     return name + '_'
   else:
     return name
 
 
-def _write_headers(self):
-  # Utility no-op method for multipart media handling
-  pass
-
-
 def _add_query_parameter(url, name, value):
-  """Adds a query parameter to a url
+  """Adds a query parameter to a url.
+
+  Replaces the current value if it already exists in the URL.
 
   Args:
     url: string, url to add the query parameter to.
@@ -99,8 +109,8 @@ def _add_query_parameter(url, name, value):
     return url
   else:
     parsed = list(urlparse.urlparse(url))
-    q = parse_qsl(parsed[4])
-    q.append((name, value))
+    q = dict(parse_qsl(parsed[4]))
+    q[name] = value
     parsed[4] = urllib.urlencode(q)
     return urlparse.urlunparse(parsed)
 
@@ -109,6 +119,12 @@ def key2param(key):
   """Converts key names into parameter names.
 
   For example, converting "max-results" -> "max_results"
+
+  Args:
+    key: string, the method key name.
+
+  Returns:
+    A safe method name based on the key name.
   """
   result = []
   key = list(key)
@@ -123,7 +139,8 @@ def key2param(key):
   return ''.join(result)
 
 
-def build(serviceName, version,
+def build(serviceName,
+          version,
           http=None,
           discoveryServiceUrl=DISCOVERY_URI,
           developerKey=None,
@@ -131,27 +148,26 @@ def build(serviceName, version,
           requestBuilder=HttpRequest):
   """Construct a Resource for interacting with an API.
 
-  Construct a Resource object for interacting with
-  an API. The serviceName and version are the
-  names from the Discovery service.
+  Construct a Resource object for interacting with an API. The serviceName and
+  version are the names from the Discovery service.
 
   Args:
-    serviceName: string, name of the service
-    version: string, the version of the service
-    discoveryServiceUrl: string, a URI Template that points to
-      the location of the discovery service. It should have two
-      parameters {api} and {apiVersion} that when filled in
-      produce an absolute URI to the discovery document for
-      that service.
-    developerKey: string, key obtained
-      from https://code.google.com/apis/console
-    model: apiclient.Model, converts to and from the wire format
-    requestBuilder: apiclient.http.HttpRequest, encapsulator for
-      an HTTP request
+    serviceName: string, name of the service.
+    version: string, the version of the service.
+    http: httplib2.Http, An instance of httplib2.Http or something that acts
+      like it that HTTP requests will be made through.
+    discoveryServiceUrl: string, a URI Template that points to the location of
+      the discovery service. It should have two parameters {api} and
+      {apiVersion} that when filled in produce an absolute URI to the discovery
+      document for that service.
+    developerKey: string, key obtained from
+      https://code.google.com/apis/console.
+    model: apiclient.Model, converts to and from the wire format.
+    requestBuilder: apiclient.http.HttpRequest, encapsulator for an HTTP
+      request.
 
   Returns:
-    A Resource object with methods for interacting with
-    the service.
+    A Resource object with methods for interacting with the service.
   """
   params = {
       'api': serviceName,
@@ -170,7 +186,7 @@ def build(serviceName, version,
   if 'REMOTE_ADDR' in os.environ:
     requested_url = _add_query_parameter(requested_url, 'userIp',
                                          os.environ['REMOTE_ADDR'])
-  logging.info('URL being requested: %s' % requested_url)
+  logger.info('URL being requested: %s' % requested_url)
 
   resp, content = http.request(requested_url)
 
@@ -183,20 +199,11 @@ def build(serviceName, version,
   try:
     service = simplejson.loads(content)
   except ValueError, e:
-    logging.error('Failed to parse as JSON: ' + content)
+    logger.error('Failed to parse as JSON: ' + content)
     raise InvalidJsonError()
 
-  filename = os.path.join(os.path.dirname(__file__), 'contrib',
-      serviceName, 'future.json')
-  try:
-    f = file(filename, 'r')
-    future = f.read()
-    f.close()
-  except IOError:
-    future = None
-
-  return build_from_document(content, discoveryServiceUrl, future,
-      http, developerKey, model, requestBuilder)
+  return build_from_document(content, discoveryServiceUrl, http=http,
+      developerKey=developerKey, model=model, requestBuilder=requestBuilder)
 
 
 def build_from_document(
@@ -209,49 +216,37 @@ def build_from_document(
     requestBuilder=HttpRequest):
   """Create a Resource for interacting with an API.
 
-  Same as `build()`, but constructs the Resource object
-  from a discovery document that is it given, as opposed to
-  retrieving one over HTTP.
+  Same as `build()`, but constructs the Resource object from a discovery
+  document that is it given, as opposed to retrieving one over HTTP.
 
   Args:
-    service: string, discovery document
-    base: string, base URI for all HTTP requests, usually the discovery URI
-    future: string, discovery document with future capabilities
-    auth_discovery: dict, information about the authentication the API supports
+    service: string, discovery document.
+    base: string, base URI for all HTTP requests, usually the discovery URI.
+    future: string, discovery document with future capabilities (deprecated).
     http: httplib2.Http, An instance of httplib2.Http or something that acts
       like it that HTTP requests will be made through.
     developerKey: string, Key for controlling API usage, generated
       from the API Console.
-    model: Model class instance that serializes and
-      de-serializes requests and responses.
+    model: Model class instance that serializes and de-serializes requests and
+      responses.
     requestBuilder: Takes an http request and packages it up to be executed.
 
   Returns:
-    A Resource object with methods for interacting with
-    the service.
+    A Resource object with methods for interacting with the service.
   """
+
+  # future is no longer used.
+  future = {}
 
   service = simplejson.loads(service)
   base = urlparse.urljoin(base, service['basePath'])
-  if future:
-    future = simplejson.loads(future)
-    auth_discovery = future.get('auth', {})
-  else:
-    future = {}
-    auth_discovery = {}
   schema = Schemas(service)
 
   if model is None:
     features = service.get('features', [])
     model = JsonModel('dataWrapper' in features)
-  resource = createResource(http, base, model, requestBuilder, developerKey,
-                       service, future, schema)
-
-  def auth_method():
-    """Discovery information about the authentication the API uses."""
-    return auth_discovery
-
-  setattr(resource, 'auth_discovery', auth_method)
+  resource = _createResource(http, base, model, requestBuilder, developerKey,
+                       service, service, schema)
 
   return resource
 
@@ -286,6 +281,7 @@ def _cast(value, schema_type):
     else:
       return str(value)
 
+
 MULTIPLIERS = {
     "KB": 2 ** 10,
     "MB": 2 ** 20,
@@ -295,7 +291,14 @@ MULTIPLIERS = {
 
 
 def _media_size_to_long(maxSize):
-  """Convert a string media size, such as 10GB or 3TB into an integer."""
+  """Convert a string media size, such as 10GB or 3TB into an integer.
+
+  Args:
+    maxSize: string, size as a string, such as 2MB or 7GB.
+
+  Returns:
+    The size as an integer value.
+  """
   if len(maxSize) < 2:
     return 0
   units = maxSize[-2:].upper()
@@ -306,8 +309,29 @@ def _media_size_to_long(maxSize):
     return int(maxSize)
 
 
-def createResource(http, baseUrl, model, requestBuilder,
-                   developerKey, resourceDesc, futureDesc, schema):
+def _createResource(http, baseUrl, model, requestBuilder,
+                   developerKey, resourceDesc, rootDesc, schema):
+  """Build a Resource from the API description.
+
+  Args:
+    http: httplib2.Http, Object to make http requests with.
+    baseUrl: string, base URL for the API. All requests are relative to this
+      URI.
+    model: apiclient.Model, converts to and from the wire format.
+    requestBuilder: class or callable that instantiates an
+      apiclient.HttpRequest object.
+    developerKey: string, key obtained from
+      https://code.google.com/apis/console
+    resourceDesc: object, section of deserialized discovery document that
+      describes a resource. Note that the top level discovery document
+      is considered a resource.
+    rootDesc: object, the entire deserialized discovery document.
+    schema: object, mapping of schema names to schema descriptions.
+
+  Returns:
+    An instance of Resource with all the methods attached for interacting with
+    that resource.
+  """
 
   class Resource(object):
     """A class for interacting with a resource."""
@@ -319,8 +343,17 @@ def createResource(http, baseUrl, model, requestBuilder,
       self._developerKey = developerKey
       self._requestBuilder = requestBuilder
 
-  def createMethod(theclass, methodName, methodDesc, futureDesc):
-    methodName = _fix_method_name(methodName)
+  def createMethod(theclass, methodName, methodDesc, rootDesc):
+    """Creates a method for attaching to a Resource.
+
+    Args:
+      theclass: type, the class to attach methods to.
+      methodName: string, name of the method to use.
+      methodDesc: object, fragment of deserialized discovery document that
+        describes the method.
+      rootDesc: object, the entire deserialized discovery document.
+    """
+    methodName = fix_method_name(methodName)
     pathUrl = methodDesc['path']
     httpMethod = methodDesc['httpMethod']
     methodId = methodDesc['id']
@@ -330,20 +363,28 @@ def createResource(http, baseUrl, model, requestBuilder,
     maxSize = 0
     if 'mediaUpload' in methodDesc:
       mediaUpload = methodDesc['mediaUpload']
-      mediaPathUrl = mediaUpload['protocols']['simple']['path']
-      mediaResumablePathUrl = mediaUpload['protocols']['resumable']['path']
+      # TODO(jcgregorio) Use URLs from discovery once it is updated.
+      parsed = list(urlparse.urlparse(baseUrl))
+      basePath = parsed[2]
+      mediaPathUrl = '/upload' + basePath + pathUrl
       accept = mediaUpload['accept']
       maxSize = _media_size_to_long(mediaUpload.get('maxSize', ''))
 
     if 'parameters' not in methodDesc:
       methodDesc['parameters'] = {}
+
+    # Add in the parameters common to all methods.
+    for name, desc in rootDesc.get('parameters', {}).iteritems():
+      methodDesc['parameters'][name] = desc
+
+    # Add in undocumented query parameters.
     for name in STACK_QUERY_PARAMETERS:
       methodDesc['parameters'][name] = {
           'type': 'string',
           'location': 'query'
           }
 
-    if httpMethod in ['PUT', 'POST', 'PATCH']:
+    if httpMethod in ['PUT', 'POST', 'PATCH'] and 'request' in methodDesc:
       methodDesc['parameters']['body'] = {
           'description': 'The request body.',
           'type': 'object',
@@ -353,12 +394,13 @@ def createResource(http, baseUrl, model, requestBuilder,
         methodDesc['parameters']['body'].update(methodDesc['request'])
       else:
         methodDesc['parameters']['body']['type'] = 'object'
-      if 'mediaUpload' in methodDesc:
-        methodDesc['parameters']['media_body'] = {
-            'description': 'The filename of the media request body.',
-            'type': 'string',
-            'required': False,
-            }
+    if 'mediaUpload' in methodDesc:
+      methodDesc['parameters']['media_body'] = {
+          'description': 'The filename of the media request body.',
+          'type': 'string',
+          'required': False,
+          }
+      if 'body' in methodDesc['parameters']:
         methodDesc['parameters']['body']['required'] = False
 
     argmap = {} # Map from method parameter name to query parameter name
@@ -398,9 +440,17 @@ def createResource(http, baseUrl, model, requestBuilder,
           query_params.remove(name)
 
     def method(self, **kwargs):
+      # Don't bother with doc string, it will be over-written by createMethod.
+
       for name in kwargs.iterkeys():
         if name not in argmap:
           raise TypeError('Got an unexpected keyword argument "%s"' % name)
+
+      # Remove args that have a value of None.
+      keys = kwargs.keys()
+      for name in keys:
+        if kwargs[name] is None:
+          del kwargs[name]
 
       for name in required_params:
         if name not in kwargs:
@@ -420,10 +470,19 @@ def createResource(http, baseUrl, model, requestBuilder,
 
       for name, enums in enum_params.iteritems():
         if name in kwargs:
-          if kwargs[name] not in enums:
-            raise TypeError(
-                'Parameter "%s" value "%s" is not an allowed value in "%s"' %
-                (name, kwargs[name], str(enums)))
+          # We need to handle the case of a repeated enum
+          # name differently, since we want to handle both
+          # arg='value' and arg=['value1', 'value2']
+          if (name in repeated_params and
+              not isinstance(kwargs[name], basestring)):
+            values = kwargs[name]
+          else:
+            values = [kwargs[name]]
+          for value in values:
+            if value not in enums:
+              raise TypeError(
+                  'Parameter "%s" value "%s" is not an allowed value in "%s"' %
+                  (name, value, str(enums)))
 
       actual_query_params = {}
       actual_path_params = {}
@@ -446,7 +505,9 @@ def createResource(http, baseUrl, model, requestBuilder,
 
       model = self._model
       # If there is no schema for the response then presume a binary blob.
-      if 'response' not in methodDesc:
+      if methodName.endswith('_media'):
+        model = MediaModel()
+      elif 'response' not in methodDesc:
         model = RawModel()
 
       headers = {}
@@ -460,7 +521,7 @@ def createResource(http, baseUrl, model, requestBuilder,
       multipart_boundary = ''
 
       if media_filename:
-        # Convert a simple filename into a MediaUpload object.
+        # Ensure we end up with a valid MediaUpload object.
         if isinstance(media_filename, basestring):
           (media_mime_type, encoding) = mimetypes.guess_type(media_filename)
           if media_mime_type is None:
@@ -473,85 +534,53 @@ def createResource(http, baseUrl, model, requestBuilder,
         else:
           raise TypeError('media_filename must be str or MediaUpload.')
 
-        if media_upload.resumable():
-          resumable = media_upload
-
         # Check the maxSize
         if maxSize > 0 and media_upload.size() > maxSize:
           raise MediaUploadSizeError("Media larger than: %s" % maxSize)
 
         # Use the media path uri for media uploads
-        if media_upload.resumable():
-          expanded_url = uritemplate.expand(mediaResumablePathUrl, params)
-        else:
-          expanded_url = uritemplate.expand(mediaPathUrl, params)
+        expanded_url = uritemplate.expand(mediaPathUrl, params)
         url = urlparse.urljoin(self._baseUrl, expanded_url + query)
+        if media_upload.resumable():
+          url = _add_query_parameter(url, 'uploadType', 'resumable')
 
-        if body is None:
-          # This is a simple media upload
-          headers['content-type'] = media_upload.mimetype()
-          expanded_url = uritemplate.expand(mediaResumablePathUrl, params)
-          if not media_upload.resumable():
-            body = media_upload.getbytes(0, media_upload.size())
+        if media_upload.resumable():
+          # This is all we need to do for resumable, if the body exists it gets
+          # sent in the first request, otherwise an empty body is sent.
+          resumable = media_upload
         else:
-          # This is a multipart/related upload.
-          msgRoot = MIMEMultipart('related')
-          # msgRoot should not write out it's own headers
-          setattr(msgRoot, '_write_headers', lambda self: None)
-
-          # attach the body as one part
-          msg = MIMENonMultipart(*headers['content-type'].split('/'))
-          msg.set_payload(body)
-          msgRoot.attach(msg)
-
-          # attach the media as the second part
-          msg = MIMENonMultipart(*media_upload.mimetype().split('/'))
-          msg['Content-Transfer-Encoding'] = 'binary'
-
-          if media_upload.resumable():
-            # This is a multipart resumable upload, where a multipart payload
-            # looks like this:
-            #
-            #  --===============1678050750164843052==
-            #  Content-Type: application/json
-            #  MIME-Version: 1.0
-            #
-            #  {'foo': 'bar'}
-            #  --===============1678050750164843052==
-            #  Content-Type: image/png
-            #  MIME-Version: 1.0
-            #  Content-Transfer-Encoding: binary
-            #
-            #  <BINARY STUFF>
-            #  --===============1678050750164843052==--
-            #
-            # In the case of resumable multipart media uploads, the <BINARY
-            # STUFF> is large and will be spread across multiple PUTs.  What we
-            # do here is compose the multipart message with a random payload in
-            # place of <BINARY STUFF> and then split the resulting content into
-            # two pieces, text before <BINARY STUFF> and text after <BINARY
-            # STUFF>. The text after <BINARY STUFF> is the multipart boundary.
-            # In apiclient.http the HttpRequest will send the text before
-            # <BINARY STUFF>, then send the actual binary media in chunks, and
-            # then will send the multipart delimeter.
-
-            payload = hex(random.getrandbits(300))
-            msg.set_payload(payload)
-            msgRoot.attach(msg)
-            body = msgRoot.as_string()
-            body, _ = body.split(payload)
-            resumable = media_upload
+          # A non-resumable upload
+          if body is None:
+            # This is a simple media upload
+            headers['content-type'] = media_upload.mimetype()
+            body = media_upload.getbytes(0, media_upload.size())
+            url = _add_query_parameter(url, 'uploadType', 'media')
           else:
+            # This is a multipart/related upload.
+            msgRoot = MIMEMultipart('related')
+            # msgRoot should not write out it's own headers
+            setattr(msgRoot, '_write_headers', lambda self: None)
+
+            # attach the body as one part
+            msg = MIMENonMultipart(*headers['content-type'].split('/'))
+            msg.set_payload(body)
+            msgRoot.attach(msg)
+
+            # attach the media as the second part
+            msg = MIMENonMultipart(*media_upload.mimetype().split('/'))
+            msg['Content-Transfer-Encoding'] = 'binary'
+
             payload = media_upload.getbytes(0, media_upload.size())
             msg.set_payload(payload)
             msgRoot.attach(msg)
             body = msgRoot.as_string()
 
-          multipart_boundary = msgRoot.get_boundary()
-          headers['content-type'] = ('multipart/related; '
-                                     'boundary="%s"') % multipart_boundary
+            multipart_boundary = msgRoot.get_boundary()
+            headers['content-type'] = ('multipart/related; '
+                                       'boundary="%s"') % multipart_boundary
+            url = _add_query_parameter(url, 'uploadType', 'multipart')
 
-      logging.info('URL being requested: %s' % url)
+      logger.info('URL being requested: %s' % url)
       return self._requestBuilder(self._http,
                                   model.response,
                                   url,
@@ -564,9 +593,15 @@ def createResource(http, baseUrl, model, requestBuilder,
     docs = [methodDesc.get('description', DEFAULT_METHOD_DOC), '\n\n']
     if len(argmap) > 0:
       docs.append('Args:\n')
+
+    # Skip undocumented params and params common to all methods.
+    skip_parameters = rootDesc.get('parameters', {}).keys()
+    skip_parameters.append(STACK_QUERY_PARAMETERS)
+
     for arg in argmap.iterkeys():
-      if arg in STACK_QUERY_PARAMETERS:
+      if arg in skip_parameters:
         continue
+
       repeated = ''
       if arg in repeated_params:
         repeated = ' (repeated)'
@@ -591,60 +626,28 @@ def createResource(http, baseUrl, model, requestBuilder,
         for (name, desc) in zip(enum, enumDesc):
           docs.append('      %s - %s\n' % (name, desc))
     if 'response' in methodDesc:
-      docs.append('\nReturns:\n  An object of the form\n\n    ')
-      docs.append(schema.prettyPrintSchema(methodDesc['response']))
+      if methodName.endswith('_media'):
+        docs.append('\nReturns:\n  The media object as a string.\n\n    ')
+      else:
+        docs.append('\nReturns:\n  An object of the form:\n\n    ')
+        docs.append(schema.prettyPrintSchema(methodDesc['response']))
 
     setattr(method, '__doc__', ''.join(docs))
     setattr(theclass, methodName, method)
 
-  def createNextMethodFromFuture(theclass, methodName, methodDesc, futureDesc):
-    """ This is a legacy method, as only Buzz and Moderator use the future.json
-    functionality for generating _next methods. It will be kept around as long
-    as those API versions are around, but no new APIs should depend upon it.
+  def createNextMethod(theclass, methodName, methodDesc, rootDesc):
+    """Creates any _next methods for attaching to a Resource.
+
+    The _next methods allow for easy iteration through list() responses.
+
+    Args:
+      theclass: type, the class to attach methods to.
+      methodName: string, name of the method to use.
+      methodDesc: object, fragment of deserialized discovery document that
+        describes the method.
+      rootDesc: object, the entire deserialized discovery document.
     """
-    methodName = _fix_method_name(methodName)
-    methodId = methodDesc['id'] + '.next'
-
-    def methodNext(self, previous):
-      """Retrieve the next page of results.
-
-      Takes a single argument, 'body', which is the results
-      from the last call, and returns the next set of items
-      in the collection.
-
-      Returns:
-        None if there are no more items in the collection.
-      """
-      if futureDesc['type'] != 'uri':
-        raise UnknownLinkType(futureDesc['type'])
-
-      try:
-        p = previous
-        for key in futureDesc['location']:
-          p = p[key]
-        url = p
-      except (KeyError, TypeError):
-        return None
-
-      url = _add_query_parameter(url, 'key', self._developerKey)
-
-      headers = {}
-      headers, params, query, body = self._model.request(headers, {}, {}, None)
-
-      logging.info('URL being requested: %s' % url)
-      resp, content = self._http.request(url, method='GET', headers=headers)
-
-      return self._requestBuilder(self._http,
-                                  self._model.response,
-                                  url,
-                                  method='GET',
-                                  headers=headers,
-                                  methodId=methodId)
-
-    setattr(theclass, methodName, methodNext)
-
-  def createNextMethod(theclass, methodName, methodDesc, futureDesc):
-    methodName = _fix_method_name(methodName)
+    methodName = fix_method_name(methodName)
     methodId = methodDesc['id'] + '.next'
 
     def methodNext(self, previous_request, previous_response):
@@ -678,7 +681,7 @@ def createResource(http, baseUrl, model, requestBuilder,
 
       request.uri = uri
 
-      logging.info('URL being requested: %s' % uri)
+      logger.info('URL being requested: %s' % uri)
 
       return request
 
@@ -687,41 +690,39 @@ def createResource(http, baseUrl, model, requestBuilder,
   # Add basic methods to Resource
   if 'methods' in resourceDesc:
     for methodName, methodDesc in resourceDesc['methods'].iteritems():
-      if futureDesc:
-        future = futureDesc['methods'].get(methodName, {})
-      else:
-        future = None
-      createMethod(Resource, methodName, methodDesc, future)
+      createMethod(Resource, methodName, methodDesc, rootDesc)
+      # Add in _media methods. The functionality of the attached method will
+      # change when it sees that the method name ends in _media.
+      if methodDesc.get('supportsMediaDownload', False):
+        createMethod(Resource, methodName + '_media', methodDesc, rootDesc)
 
   # Add in nested resources
   if 'resources' in resourceDesc:
 
-    def createResourceMethod(theclass, methodName, methodDesc, futureDesc):
-      methodName = _fix_method_name(methodName)
+    def createResourceMethod(theclass, methodName, methodDesc, rootDesc):
+      """Create a method on the Resource to access a nested Resource.
+
+      Args:
+        theclass: type, the class to attach methods to.
+        methodName: string, name of the method to use.
+        methodDesc: object, fragment of deserialized discovery document that
+          describes the method.
+        rootDesc: object, the entire deserialized discovery document.
+      """
+      methodName = fix_method_name(methodName)
 
       def methodResource(self):
-        return createResource(self._http, self._baseUrl, self._model,
+        return _createResource(self._http, self._baseUrl, self._model,
                               self._requestBuilder, self._developerKey,
-                              methodDesc, futureDesc, schema)
+                              methodDesc, rootDesc, schema)
 
       setattr(methodResource, '__doc__', 'A collection resource.')
       setattr(methodResource, '__is_resource__', True)
       setattr(theclass, methodName, methodResource)
 
     for methodName, methodDesc in resourceDesc['resources'].iteritems():
-      if futureDesc and 'resources' in futureDesc:
-        future = futureDesc['resources'].get(methodName, {})
-      else:
-        future = {}
-      createResourceMethod(Resource, methodName, methodDesc, future)
+      createResourceMethod(Resource, methodName, methodDesc, rootDesc)
 
-  # Add <m>_next() methods to Resource
-  if futureDesc and 'methods' in futureDesc:
-    for methodName, methodDesc in futureDesc['methods'].iteritems():
-      if 'next' in methodDesc and methodName in resourceDesc['methods']:
-        createNextMethodFromFuture(Resource, methodName + '_next',
-                         resourceDesc['methods'][methodName],
-                         methodDesc['next'])
   # Add _next() methods
   # Look for response bodies in schema that contain nextPageToken, and methods
   # that take a pageToken parameter.

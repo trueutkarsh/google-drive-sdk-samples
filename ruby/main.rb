@@ -13,12 +13,9 @@
 # limitations under the License.
 
 require 'sinatra'
+require 'sinatra/activerecord'
 require 'google/api_client'
 require 'google/api_client/client_secrets'
-require 'logger'
-require 'multi_json'
-require 'data_mapper'
-
 enable :sessions
 
 SCOPES = [
@@ -29,27 +26,20 @@ SCOPES = [
 
 ##
 # Datastore entity for storing OAuth 2.0 credentials.
-class User
-  include DataMapper::Resource
-  property :id, Serial
-  property :email, String, :length => 255
-  property :refresh_token, String, :length => 255
+class User < ActiveRecord::Base
 end
 
 ##
 # Set up
 configure do
-  db_url = Addressable::URI.parse(ENV['DATABASE_URL'] || "sqlite://#{Dir.pwd}/user.db")
-  DataMapper.setup(:default, db_url)
-  User.auto_migrate!
-
-  # App identity
+  set :port, 8000
+  set :public_folder, Proc.new { File.join(root, "app") }
+  set :database, Addressable::URI.parse(ENV['DATABASE_URL'] || "sqlite:///user.db").to_s
   set :credentials, Google::APIClient::ClientSecrets.load
-  set :app_id, settings.credentials.client_id.sub(/[.-].*/,'')
 
   # Preload API definitions
   client = Google::APIClient.new
-  set :drive, client.discovered_api('drive', 'v1')
+  set :drive, client.discovered_api('drive', 'v2')
   set :oauth2, client.discovered_api('oauth2', 'v2')
 end
 
@@ -61,6 +51,12 @@ helpers do
     [200, data.to_json]
   end
 
+  def current_user
+    if session[:user_id]
+      @user ||= User.get(session[:user_id])
+    end
+  end
+  
   ##
   # Get an API client instance
   def api_client
@@ -73,12 +69,6 @@ helpers do
       client.authorization.scope = SCOPES
       client
     end)
-  end
-
-  def current_user
-    if session[:user_id]
-      @user ||= User.get(session[:user_id])
-    end
   end
 
   def authorized?
@@ -110,7 +100,10 @@ def authorize_code(authorization_code)
   api_client.authorization.fetch_access_token!
 
   result = api_client.execute!(:api_method => settings.oauth2.userinfo.get)
-  user = User.first_or_create(:email => result.data.email)
+  user = User.find_or_create_by_profile_id(result.data.id)
+  if user.new_record?
+    user.email = result.data.email
+  end
   api_client.authorization.refresh_token = (api_client.authorization.refresh_token || user.refresh_token)
   if user.refresh_token != api_client.authorization.refresh_token
     user.refresh_token = api_client.authorization.refresh_token
@@ -133,12 +126,15 @@ end
 # Prepare request data for upload
 def prepare_data(body)
   data = MultiJson.decode(body)
-  content = StringIO.new(data['content'])
   resource_id = data['resource_id']
+  file_content = nil
 
-  data.keep_if { |k,v| %w{title description mimeType}.include? k}
-  file_content = Google::APIClient::UploadIO.new(content, data['mimeType'])
-
+  if data['content']    
+    content = StringIO.new(data['content'])
+    file_content = Google::APIClient::UploadIO.new(content, data['mimeType'])
+  end
+  data.keep_if { |k,v| %w{title labels parents description mimeType}.include? k}
+  
   [resource_id, data, file_content]
 end
 
@@ -146,22 +142,41 @@ end
 # Main entry point for the app. Ensures the user is authorized & inits the editor
 # for either edit of the opened files or creating a new file.
 get '/' do
-  state = params[:state] || '{}'
   if params[:code]
     authorize_code(params[:code])
-    redirect to("/?state=#{Addressable::URI.encode(state)}")
   elsif params[:error] # User denied the oauth grant
     halt 403
   end
+  redirect auth_url(params[:state]) unless authorized?
 
-  redirect auth_url(state) unless authorized?
-
-  state = MultiJson.decode(state)
-  @state = state
-  @file_ids = (state['ids'] || [''])
-  @app_id = settings.app_id
-  erb :index
+  if params[:state] || params[:code]
+    state = MultiJson.decode(params[:state] || '{}')
+    if state['parentId']
+      redirect to("/#/create/#{state['parentId']}")
+    else
+      doc_id = state['ids'] ? state['ids'].first : ''
+      redirect to("/#/edit/#{doc_id}")
+    end
+  end
+  File.read(File.join(settings.public_folder, 'index.html'))
 end
+
+###
+# Get the current user profile
+# 
+get '/user' do
+  result = api_client.execute!(:api_method => settings.oauth2.userinfo.get)
+  json result.data
+end
+
+###
+# Get Drive metadata
+# 
+get '/about' do
+  result = api_client.execute!(:api_method => settings.drive.about.get)
+  json result.data
+end
+
 
 ###
 # Load content
@@ -169,9 +184,9 @@ end
 get '/svc' do
   result = api_client.execute!(
     :api_method => settings.drive.files.get,
-    :parameters => { 'id' => params['file_id'] })
+    :parameters => { 'fileId' => params['file_id'] })
   file = result.data.to_hash
-  result = api_client.execute!(:uri => result.data.download_url)
+  result = api_client.execute(:uri => result.data.downloadUrl)
   file['content'] = result.body
   json file
 end
@@ -180,6 +195,7 @@ end
 # Save a new file
 post '/svc' do
   _, file, content = prepare_data(request.body)
+  puts "POST #{file} #{content}"
   result = api_client.execute!(
     :api_method => settings.drive.files.insert,
     :body_object => file,
@@ -194,15 +210,27 @@ end
 # Update existing file
 put '/svc' do
   resource_id, file, content = prepare_data(request.body)
-  result = api_client.execute!(
-    :api_method => settings.drive.files.update,
-    :body_object => file,
-    :media => content,
-    :parameters => {
-      'id' => resource_id,
-      'newRevision' => "true",
-      'uploadType' => 'multipart',
-      'alt' => 'json'})
+  puts "PUT  #{file} #{content}"
+  if content.nil?
+    result = api_client.execute(
+      :api_method => settings.drive.files.patch,
+      :body_object => file,
+      :parameters => {
+        'fileId' => resource_id
+      }
+    )
+    print result.body
+  else
+    result = api_client.execute(
+      :api_method => settings.drive.files.update,
+      :body_object => file,
+      :media => content,
+      :parameters => {
+        'fileId' => resource_id,
+        'newRevision' => params['newRevision'] || "false",
+        'uploadType' => 'multipart',
+        'alt' => 'json'})
+  end
   json result.data.id
 end
 

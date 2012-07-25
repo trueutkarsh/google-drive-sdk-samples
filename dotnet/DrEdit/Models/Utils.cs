@@ -39,9 +39,9 @@ namespace DrEdit.Models
         /// </summary>
         /// <param name="credentials">OAuth 2.0 credentials.</param>
         /// <returns>Drive service object.</returns>
-        internal static Google.Apis.Drive.v1.DriveService BuildService(IAuthenticator credentials)
+        internal static Google.Apis.Drive.v2.DriveService BuildService(IAuthenticator credentials)
         {
-            return new Google.Apis.Drive.v1.DriveService(credentials);
+            return new Google.Apis.Drive.v2.DriveService(credentials);
         }
 
         /// <summary>
@@ -122,27 +122,32 @@ namespace DrEdit.Models
         /// <param name="credentials">OAuth 2.0 credentials to authorize the request.</param>
         /// <returns>User's information.</returns>
         /// <exception cref="NoUserIdException">An error occurred.</exception>
-        static Userinfo GetUserInfo(IAuthorizationState credentials)
+        public static Userinfo GetUserInfo(IAuthenticator credentials) 
         {
-            Oauth2Service userInfoService = new Oauth2Service(GetAuthenticatorFromState(credentials));
+            Oauth2Service userInfoService = new Oauth2Service(credentials);
             Userinfo userInfo = null;
-            try
-            {
+            try {
                 userInfo = userInfoService.Userinfo.Get().Fetch();
-            }
-            catch (GoogleApiRequestException e)
-            {
+            } catch (GoogleApiRequestException e) {
                 Console.WriteLine("An error occurred: " + e.Message);
             }
 
-            if (userInfo != null && !String.IsNullOrEmpty(userInfo.Id))
-            {
+            if (userInfo != null && !String.IsNullOrEmpty(userInfo.Id)) {
                 return userInfo;
-            }
-            else
-            {
+            } else {
                 throw new NoUserIdException();
             }
+        }
+
+        /// <summary>
+        /// Send a request to the UserInfo API to retrieve the user's information.
+        /// </summary>
+        /// <param name="credentials">OAuth 2.0 credentials to authorize the request.</param>
+        /// <returns>User's information.</returns>
+        /// <exception cref="NoUserIdException">An error occurred.</exception>
+        public static Userinfo GetUserInfo(IAuthorizationState credentials)
+        {
+            return GetUserInfo(GetAuthenticatorFromState(credentials));
         }
 
         /// <summary>
@@ -242,7 +247,8 @@ namespace DrEdit.Models
             string result = "";
             try
             {
-                HttpWebRequest request = auth.CreateHttpWebRequest("GET", new Uri(downloadUrl));
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(new Uri(downloadUrl));
+                auth.ApplyAuthenticationToRequest(request);
 
                 HttpWebResponse response = (HttpWebResponse)request.GetResponse();
                 System.IO.Stream stream = response.GetResponseStream();
@@ -259,146 +265,44 @@ namespace DrEdit.Models
         /// <summary>
         /// Update both metadata and content of a file and return the updated file.
         /// </summary>
-        public static Google.Apis.Drive.v1.Data.File UpdateResource(Google.Apis.Drive.v1.DriveService service, Authenticator auth, String fileId, String newTitle,
+        public static Google.Apis.Drive.v2.Data.File UpdateResource(Google.Apis.Drive.v2.DriveService service, IAuthenticator auth, String fileId, String newTitle,
             String newDescription, String newMimeType, String content, bool newRevision)
         {
-            Google.Apis.Drive.v1.Data.File temp = updateMetadata(service, fileId, newTitle, newDescription, newMimeType, false);
-            if (!string.IsNullOrWhiteSpace(content))
-            {
-                temp = updateFile(service, auth, temp.Id, temp.MimeType, content, newRevision);
-            }
-            return temp;
-        }
+            // First retrieve the file from the API.
+            Google.Apis.Drive.v2.Data.File body = service.Files.Get(fileId).Fetch();
 
-        /// <summary>
-        /// Update an existing file's metadata.
-        /// </summary>
-        /// <param name="service">Drive API service instance.</param>
-        /// <param name="fileId">ID of the file to update.</param>
-        /// <param name="newTitle">New title for the file.</param>
-        /// <param name="newDescription">New description for the file.</param>
-        /// <param name="newMimeType">New MIME type for the file.</param>
-        /// <param name="newRevision">Whether or not to create a new revision for this file.</param>
-        /// <returns>Updated file metadata, null is returned if an API error occurred.</returns>
-        private static Google.Apis.Drive.v1.Data.File updateMetadata(Google.Apis.Drive.v1.DriveService service, String fileId, String newTitle,
-            String newDescription, String newMimeType, bool newRevision)
-        {
-            try
-            {
-                // First retrieve the file from the API.
-                Google.Apis.Drive.v1.Data.File file = service.Files.Get(fileId).Fetch();
+            body.Title = newTitle;
+            body.Description = newDescription;
+            body.MimeType = newMimeType;
 
-                file.Title = newTitle;
-                file.Description = newDescription;
-                file.MimeType = newMimeType;
+            byte[] byteArray = Encoding.ASCII.GetBytes(content);
+            MemoryStream stream = new MemoryStream(byteArray);
 
-                // Update the file's metadata.
-                Google.Apis.Drive.v1.FilesResource.UpdateRequest request = service.Files.Update(file, fileId);
-                request.NewRevision = newRevision;
-                Google.Apis.Drive.v1.Data.File updatedFile = request.Fetch();
+            Google.Apis.Drive.v2.FilesResource.UpdateMediaUpload request = service.Files.Update(body, fileId, stream, newMimeType);
+            request.Upload();
 
-                return updatedFile;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("An error occurred: " + e.Message);
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Update an existing file's content.
-        /// </summary>
-        /// <param name="service">Drive API service instance.</param>
-        /// <param name="fileId">ID of the file to update.</param>
-        /// <param name="newMimeType">New MIME type for the file.</param>
-        /// <param name="newFilename">Filename of the new content to upload.</param>
-        /// <param name="newRevision">Whether or not to create a new revision for this file.</param>
-        /// <returns>Updated file metadata, null is returned if an API error occurred.</returns>
-        private static Google.Apis.Drive.v1.Data.File updateFile(Google.Apis.Drive.v1.DriveService service,
-            Authenticator auth, String fileId, String newMimeType, String content, bool newRevision)
-        {
-            try
-            {
-                HttpWebRequest request = (HttpWebRequest)HttpWebRequest.Create(
-                   "https://www.googleapis.com/upload/drive/v1/files/"
-                   + fileId + "?newRevision=" + newRevision + "&uploadType=media");
-                request.Method = "PUT";
-
-                request.ContentLength = content.Length;
-                if (!string.IsNullOrEmpty(newMimeType))
-                {
-                    request.ContentType = newMimeType;
-                }
-                auth.ApplyAuthenticationToRequest(request);
-
-                Stream requestStream = request.GetRequestStream();
-                using (StreamWriter writer = new StreamWriter(requestStream))
-                {
-                    writer.Write(content);
-                }
-                //requestStream.Write(data, 0, data.Length);
-                requestStream.Close();
-
-                IResponse response = new Response(request.GetResponse());
-                Google.Apis.Drive.v1.Data.File file = service.DeserializeResponse<Google.Apis.Drive.v1.Data.File>(response);
-
-                // Uncomment the following line to print the File ID.
-                // Console.WriteLine("File ID: " + file.Id);
-
-                return file;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("An error occurred: " + e.Message);
-                return null;
-            }
+            return request.ResponseBody;
         }
 
         /// <summary>
         /// Create a new file and return it.
         /// </summary>
-        public static Google.Apis.Drive.v1.Data.File InsertResource(Google.Apis.Drive.v1.DriveService service, Authenticator auth, String title,
+        public static Google.Apis.Drive.v2.Data.File InsertResource(Google.Apis.Drive.v2.DriveService service, IAuthenticator auth, String title,
             String description, String mimeType, String content)
         {
-            Google.Apis.Drive.v1.Data.File temp = insertMetadata(service, title, description, mimeType);
-            if (!string.IsNullOrWhiteSpace(content))
-            {
-                temp = updateFile(service, auth, temp.Id, temp.MimeType, content, true);
-            }
-            return temp;
-        }
-
-        /// <summary>
-        /// Insert new file metadata.
-        /// </summary>
-        /// <param name="service">Drive API service instance.</param>
-        /// <param name="title">Title of the file to insert.</param>
-        /// <param name="description">Description of the file to insert.</param>
-        /// <param name="mimeType">MIME type of the file to insert.</param>
-        /// <returns>Inserted file metadata, null is returned if an API error occurred.</returns>
-        private static Google.Apis.Drive.v1.Data.File insertMetadata(Google.Apis.Drive.v1.DriveService service, String title, String description, String mimeType)
-        {
             // File's metadata.
-            Google.Apis.Drive.v1.Data.File body = new Google.Apis.Drive.v1.Data.File();
+            Google.Apis.Drive.v2.Data.File body = new Google.Apis.Drive.v2.Data.File();
             body.Title = title;
             body.Description = description;
             body.MimeType = mimeType;
 
-            try
-            {
-                Google.Apis.Drive.v1.Data.File file = service.Files.Insert(body).Fetch();
+            byte[] byteArray = Encoding.ASCII.GetBytes(content);
+            MemoryStream stream = new MemoryStream(byteArray);
 
-                // Uncomment the following line to print the File ID.
-                // Console.WriteLine("File ID: " + file.Id);
+            Google.Apis.Drive.v2.FilesResource.InsertMediaUpload request = service.Files.Insert(body, stream, mimeType);
+            request.Upload();
 
-                return file;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("An error occurred: " + e.Message);
-                return null;
-            }
+            return request.ResponseBody;
         }
     }
 
