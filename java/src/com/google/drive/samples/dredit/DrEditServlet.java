@@ -36,6 +36,7 @@ import javax.servlet.http.HttpServletResponse;
  *
  * @author vicfryzel@google.com (Vic Fryzel)
  */
+@SuppressWarnings("serial")
 public abstract class DrEditServlet extends HttpServlet {
   protected static final HttpTransport TRANSPORT = new NetHttpTransport();
   protected static final JsonFactory JSON_FACTORY = new JacksonFactory();
@@ -102,6 +103,11 @@ public abstract class DrEditServlet extends HttpServlet {
           "This application is not properly configured: %s", e.getMessage());
       sendError(resp, 500, message);
       throw new RuntimeException(message);
+    } catch (IOException e) {
+      String message = String.format(
+          "An error happened while reading credentials: %s", e.getMessage());
+      sendError(resp, 500, message);
+      throw new RuntimeException(message);
     }
   }
 
@@ -117,6 +123,11 @@ public abstract class DrEditServlet extends HttpServlet {
         ioe.printStackTrace();
         throw new RuntimeException("Failed to redirect for authorization.");
       }
+    } catch (IOException e) {
+      String message = String.format(
+          "An error happened while reading credentials: %s", e.getMessage());
+      sendError(resp, 500, message);
+      throw new RuntimeException(message);
     }
     return null;
   }
@@ -129,6 +140,13 @@ public abstract class DrEditServlet extends HttpServlet {
 
   protected void deleteCredential(HttpServletRequest req, HttpServletResponse resp) {
     CredentialMediator mediator = getCredentialMediator(req, resp);
-    mediator.deleteActiveCredential();
+    try {
+      mediator.deleteActiveCredential();
+    } catch (IOException e) {
+      String message = String.format(
+          "An error happened while reading credentials: %s", e.getMessage());
+      sendError(resp, 500, message);
+      throw new RuntimeException(message);
+    }
   }
 }

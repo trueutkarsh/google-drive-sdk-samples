@@ -23,7 +23,7 @@ should be defined in this file.
 __author__ = 'jcgregorio@google.com (Joe Gregorio)'
 
 
-from anyjson import simplejson
+from oauth2client.anyjson import simplejson
 
 
 class Error(Exception):
@@ -91,9 +91,18 @@ class ResumableUploadError(Error):
   pass
 
 
-class BatchError(Error):
+class BatchError(HttpError):
   """Error occured during batch operations."""
-  pass
+
+  def __init__(self, reason, resp=None, content=None):
+    self.resp = resp
+    self.content = content
+    self.reason = reason
+
+  def __repr__(self):
+      return '<BatchError %s "%s">' % (self.resp.status, self.reason)
+
+  __str__ = __repr__
 
 
 class UnexpectedMethodError(Error):

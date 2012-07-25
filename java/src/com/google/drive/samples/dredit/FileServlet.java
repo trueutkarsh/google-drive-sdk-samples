@@ -37,6 +37,7 @@ import javax.servlet.http.HttpServletResponse;
  *
  * @author vicfryzel@google.com (Vic Fryzel)
  */
+@SuppressWarnings("serial")
 public class FileServlet extends DrEditServlet {
   /**
    * Given a {@code file_id} URI parameter, return a JSON representation
@@ -108,13 +109,18 @@ public class FileServlet extends DrEditServlet {
   @Override
   public void doPut(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
+    boolean newRevision = req.getParameter("newRevision").equals(Boolean.TRUE);
     Drive service = getDriveService(req, resp);
     ClientFile clientFile = new ClientFile(req.getReader());
     File file = clientFile.toFile();
-    file = service.files().update(
-        clientFile.resource_id, file,
-        ByteArrayContent.fromString(clientFile.mimeType, clientFile.content))
-        .execute();
+    // If there is content we update the given file
+    if (clientFile.content != null) {
+      file = service.files().update(clientFile.resource_id, file,
+          ByteArrayContent.fromString(clientFile.mimeType, clientFile.content))
+          .setNewRevision(newRevision).execute();
+    } else { // If there is no content we patch the metadata only
+      file = service.files().patch(clientFile.resource_id, file).setNewRevision(newRevision).execute();
+    }
 
     resp.setContentType(JSON_MIMETYPE);
     resp.getWriter().print(new Gson().toJson(file.getId()).toString());
@@ -155,7 +161,6 @@ public class FileServlet extends DrEditServlet {
       HttpServletResponse resp) {
     Credential credentials = getCredential(req, resp);
 
-    return Drive.builder(TRANSPORT, JSON_FACTORY)
-        .setHttpRequestInitializer(credentials).build();
+    return new Drive.Builder(TRANSPORT, JSON_FACTORY, credentials).build();
   }
 }

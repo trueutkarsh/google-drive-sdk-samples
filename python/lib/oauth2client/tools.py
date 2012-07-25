@@ -27,8 +27,10 @@ import BaseHTTPServer
 import gflags
 import socket
 import sys
+import webbrowser
 
 from client import FlowExchangeError
+from client import OOB_CALLBACK_URN
 
 try:
   from urlparse import parse_qsl
@@ -89,12 +91,14 @@ class ClientRedirectHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     pass
 
 
-def run(flow, storage):
+def run(flow, storage, http=None):
   """Core code for a command-line application.
 
   Args:
     flow: Flow, an OAuth 2.0 Flow to step through.
     storage: Storage, a Storage to store the credential in.
+    http: An instance of httplib2.Http.request
+         or something that acts like it.
 
   Returns:
     Credentials, the obtained credential.
@@ -113,20 +117,36 @@ def run(flow, storage):
         success = True
         break
     FLAGS.auth_local_webserver = success
+    if not success:
+      print 'Failed to start a local webserver listening on either port 8080'
+      print 'or port 9090. Please check your firewall settings and locally'
+      print 'running programs that may be blocking or using those ports.'
+      print
+      print 'Falling back to --noauth_local_webserver and continuing with',
+      print 'authorization.'
+      print
 
   if FLAGS.auth_local_webserver:
     oauth_callback = 'http://%s:%s/' % (FLAGS.auth_host_name, port_number)
   else:
-    oauth_callback = 'oob'
+    oauth_callback = OOB_CALLBACK_URN
   authorize_url = flow.step1_get_authorize_url(oauth_callback)
 
-  print 'Go to the following link in your browser:'
-  print authorize_url
-  print
   if FLAGS.auth_local_webserver:
+    webbrowser.open(authorize_url, new=1, autoraise=True)
+    print 'Your browser has been opened to visit:'
+    print
+    print '    ' + authorize_url
+    print
     print 'If your browser is on a different machine then exit and re-run this'
     print 'application with the command-line parameter '
-    print '--noauth_local_webserver.'
+    print
+    print '  --noauth_local_webserver'
+    print
+  else:
+    print 'Go to the following link in your browser:'
+    print
+    print '    ' + authorize_url
     print
 
   code = None
@@ -143,7 +163,7 @@ def run(flow, storage):
     code = raw_input('Enter verification code: ').strip()
 
   try:
-    credential = flow.step2_exchange(code)
+    credential = flow.step2_exchange(code, http)
   except FlowExchangeError, e:
     sys.exit('Authentication has failed: %s' % e)
 
