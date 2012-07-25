@@ -18,8 +18,10 @@
  * limitations under the License.
  */
 
-require_once 'libs/gd-v1-php/apiClient.php';
-require_once 'libs/gd-v1-php/contrib/apiDriveService.php';
+require_once 'libs/gd-v2-php/apiClient.php';
+require_once 'libs/gd-v2-php/contrib/apiDriveService.php';
+
+require_once 'oauth_credentials.php';
 
 /**
  * Class for accessing the Google Drive API, including retrieving,
@@ -57,6 +59,7 @@ class DriveHandler {
     $client = new apiClient();
     // return data from API calls as PHP objects instead of arrays
     $client->setUseObjects(true);
+    error_log(print_r($credentials, 1));
     $client->setAccessToken($credentials->toJson());
     // set clientId and clientSecret in case token is expired 
     // and refresh is needed
@@ -169,6 +172,18 @@ class DriveHandler {
       $createdFile = $this->SaveNewFile($inputFile);
       $_SESSION['fileId'] = $createdFile->id;
       return $createdFile;
+    }
+  }
+
+  function GetAbout() {
+    try {
+      return $this->service->about->get();
+    } catch (apiServiceException $e) {
+      /*
+       * Log error and re-throw
+       */
+      error_log('Error getting about from Drive: ' . $e->getMessage(), 0);
+      throw $e;
     }
   }
 }

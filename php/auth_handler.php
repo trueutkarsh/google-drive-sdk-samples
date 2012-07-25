@@ -23,12 +23,13 @@
  * files on Google Drive.  Also, load in the UserInfo service for retrieving
  * Google user profile information and the DrEdit configuration.
  */
-require_once 'libs/gd-v1-php/apiClient.php';
-require_once 'libs/gd-v1-php/contrib/apiOauth2Service.php';
+require_once 'libs/gd-v2-php/apiClient.php';
+require_once 'libs/gd-v2-php/contrib/apiOauth2Service.php';
 require_once 'oauth_credentials.php';
 require_once 'config.php';
 
 session_start();
+//
 
 /**
  * Class for handling authentication of the user and authorization
@@ -260,6 +261,7 @@ class AuthHandler {
        * If an authorization code is in the URL, process it
        */
       if (isset($_GET['code'])) {
+        error_log('doing code');
         /**
          * Redeemed authorization codes are stored in the session to prevent
          * accidental multiple redemption of the same code causing an exception.
@@ -345,7 +347,8 @@ class AuthHandler {
          * Request came to JS API. JS needs to decide how to handle, so throw a 401
          * and stop processing the PHP code.
          */
-        header("HTTP/1.1 401 Unauthorized");
+        header("HTTP/1.1 402 Unauthorized");
+        echo print_r($_SESSION, 1);
         exit;
       }
     }
