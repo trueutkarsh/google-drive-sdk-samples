@@ -13,8 +13,7 @@ gapi.load('drive-share');
 
 angular.module('app', ['app.filters', 'app.services', 'app.directives'])
     .constant('saveInterval', 15000)
-    // .constant('appId', [[YOUR_APP_ID]]) // Change this by your Application ID
-    .constant('appId', ['700795296304'])
+    .constant('appId', [[YOUR_APP_ID]]) // Change this by your Application ID
     .config(['$routeProvider', function ($routeProvider) {
     $routeProvider
         .when('/edit/:id', {templateUrl:'partials/editor.html', controller:EditorCtrl})
