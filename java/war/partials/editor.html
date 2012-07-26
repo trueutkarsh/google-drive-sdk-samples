@@ -6,7 +6,7 @@
         <h3 ng-hide="doc.info.editable" class="doc-title">{{doc.info.title}}</h3>
         <star value="doc.info.labels.starred" click="editor.dirty(true)"></star></span>
     <span class="span4">{{editor.state() | saveStateFormatter }}</span>
-    <span class="span4" ng-controller="ShareCtrl"><a class="btn pull-right" href click="share"> Share</a></span>
+    <span class="span4" ng-controller="ShareCtrl"><input ng-disabled="!enabled()" type="button" class="btn pull-right" href ng-click="share()" value="Share"></button></span>
   </div>
   <div class="navbar subnav">
     <ul ng-controller="MenuCtrl" class="nav">

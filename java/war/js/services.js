@@ -6,22 +6,24 @@ var ONE_HOUR_IN_MS = 1000 * 60 * 60;
 
 // Shared model for current document
 module.factory('doc',
-    function ($rootScope) {
-        var service = $rootScope.$new(true);
-        service.dirty = false;
-        service.lastSave = 0;
-        service.timeSinceLastSave = function () {
-            return new Date().getTime() - this.lastSave;
-        };
-        service.$watch('info',
-            function (newValue, oldValue) {
-                if (oldValue != null && newValue === oldValue) {
-                    service.dirty = true;
-                }
-            },
-            true);
-        return service;
-    });
+	    function ($rootScope) {
+	        var service = $rootScope.$new(true);
+	        service.dirty = false;
+	        service.lastSave = 0;
+	        service.timeSinceLastSave = function () {
+	            return new Date().getTime() - this.lastSave;
+	        };
+	        service.$watch('info',
+	            function (newValue, oldValue) {
+	                service.dirty = true;
+	            },
+	            true);
+	        service.$watch('info',
+	            function() {
+	                service.dirty = false;
+	            });
+	        return service;
+	    });
 
 module.factory('editor',
     function (doc, backend, $q, $rootScope, $log) {
@@ -43,16 +45,13 @@ module.factory('editor',
                 return data;
             },
             create:function (folderId) {
-            	if (!folderId) {
-            		folderId = "root";
-            	}
                 $log.info("Creating new doc");
                 this.updateEditor({
                     content:'',
                     labels:{
                         starred:false
                     },
-                    parents:[{id: folderId}],
+                    parents: [ {id: folderId || 'root'} ],
                     editable:true,
                     title:'Untitled document',
                     description:'',
@@ -124,7 +123,7 @@ module.factory('editor',
                 fileInfo.content = null;
                 doc.lastSave = 0;
                 doc.info = fileInfo;
-                doc.resource_id = fileInfo.id;
+                doc.resource_id = fileInfo.resource_id;
                 editor.setSession(session);
                 editor.setReadOnly(!doc.info.editable);
                 editor.focus();
