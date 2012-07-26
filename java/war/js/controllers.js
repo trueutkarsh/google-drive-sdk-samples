@@ -30,20 +30,14 @@ function EditorCtrl($scope, $location, $routeParams, $timeout, editor, doc, auto
 }
 
 function ShareCtrl($scope, appId, doc) {
-	/*var sharingClient;
-	var init = function() {
-      sharingClient = new gapi.drive.share.ShareClient(appId);
-	}
-	gapi.load('drive-share', init);
-	
-	$scope.enabled = function() {
-	    return doc.resource_id != null;
-	};
-	$scope.share = function() {
-		sharingClient.setItemIds([doc.resource_id]);
-		sharingClient.showSettingsDialog();
-	}*/
-	
+    var client = new gapi.drive.share.ShareClient(appId);
+    $scope.enabled = function() {
+        return doc.resource_id != null;
+    };
+    $scope.share = function() {
+        client.setItemIds([doc.resource_id]);
+        client.showSettingsDialog();
+    }
 }
 
 function MenuCtrl($scope, $location, appId) {
