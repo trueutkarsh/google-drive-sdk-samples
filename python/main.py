@@ -310,7 +310,10 @@ class MainPage(BaseDriveHandler):
     # the file id(s) that have been sent from the Drive user interface.
     drive_state = DriveState.FromRequest(self.request)
     if drive_state.action == 'open' and len(drive_state.ids) > 0:
-      self.redirect('/#edit/%s' % drive_state.ids[0])
+      code = self.request.get('code')
+      if code:
+        code = '?code=%s' % code
+      self.redirect('/#edit/%s%s' % (drive_state.ids[0], code))
       return
     # Fetch the credentials by extracting an OAuth 2.0 authorization code from
     # the request URL. If the code is not present, redirect to the OAuth 2.0
@@ -429,20 +432,29 @@ class ServiceHandler(BaseDriveHandler):
     data = self.RequestJSON()
     try:
       # Create a new file data structure.
-      content = data.get('content', '')
+      content = data.get('content')
       if 'content' in data:
         data.pop('content')
-      # Make an update request to update the file. A MediaInMemoryUpload
-      # instance is used to upload the file body. Because of a limitation, this
-      # request must be made in two parts, the first to update the metadata, and
-      # the second to update the body.
-      resource = service.files().update(
-        fileId=data['resource_id'],
-        newRevision=False,
-        body=data,
-        media_body=MediaInMemoryUpload(
-            content, data['mimeType'], resumable=True)
-      ).execute()
+      if content is not None:
+        # Make an update request to update the file. A MediaInMemoryUpload
+        # instance is used to upload the file body. Because of a limitation, this
+        # request must be made in two parts, the first to update the metadata, and
+        # the second to update the body.
+        resource = service.files().update(
+            fileId=data['resource_id'],
+            newRevision=self.request.get('newRevision', False),
+            body=data,
+            media_body=MediaInMemoryUpload(
+                content, data['mimeType'], resumable=True)
+            ).execute()
+      else:
+        # Only update the metadata, a patch request is prefered but not yet
+        # supported on Google App Engine; see
+        # http://code.google.com/p/googleappengine/issues/detail?id=6316.
+        resource = service.files().update(
+            fileId=data['resource_id'],
+            newRevision=self.request.get('newRevision', False),
+            body=data).execute()
       # Respond with the new file id as JSON.
       self.RespondJSON(resource['id'])
     except AccessTokenRefreshError:
