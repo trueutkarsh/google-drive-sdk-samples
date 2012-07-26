@@ -30,11 +30,11 @@ function EditorCtrl($scope, $location, $routeParams, $timeout, editor, doc, auto
 }
 
 function ShareCtrl($scope, appId, doc) {
-     var client = new gapi.drive.share.ShareClient(appId);
      $scope.enabled = function() {
          return doc.resource_id != null;
      };
      $scope.share = function() {
+         var client = new gapi.drive.share.ShareClient(appId);
          client.setItemIds([doc.resource_id]);
          client.showSettingsDialog();
      }
