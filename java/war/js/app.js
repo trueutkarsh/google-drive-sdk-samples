@@ -9,7 +9,7 @@ var EditorState = {
 };
 
 google.load('picker', '1');
-//gapi.load('drive-share');
+gapi.load('drive-share');
 
 angular.module('app', ['app.filters', 'app.services', 'app.directives'])
     .constant('saveInterval', 15000)
