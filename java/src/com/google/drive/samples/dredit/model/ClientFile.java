@@ -122,10 +122,10 @@ public class ClientFile {
    */
   public File toFile() {
     File file = new File();
-    file.setId(this.resource_id);
-    file.setTitle(this.title);
-    file.setDescription(this.description);
-    file.setMimeType(this.mimeType);
+    file.setId(resource_id);
+    file.setTitle(title);
+    file.setDescription(description);
+    file.setMimeType(mimeType);
     file.setLabels(labels);
     file.setEditable(editable);
     file.setParents(parents);
