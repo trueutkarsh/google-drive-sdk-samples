@@ -147,7 +147,7 @@
     } else {
       NSLog(@"An error occurred: %@", error);
       [DrEditUtilities showErrorMessageWithTitle:@"Unable to load file"
-                                         message:error.description
+                                         message:[error description]
                                         delegate:self];
     }
   }];
@@ -194,7 +194,7 @@
     } else {
       NSLog(@"An error occurred: %@", error);
       [DrEditUtilities showErrorMessageWithTitle:@"Unable to save file"
-                                         message:error.description
+                                         message:[error description]
                                         delegate:self];
     }
   }];
@@ -217,7 +217,7 @@
     } else {
       NSLog(@"An error occurred: %@", error);
       [DrEditUtilities showErrorMessageWithTitle:@"Unable to delete file"
-                                         message:error.description
+                                         message:[error description]
                                         delegate:self];
     }
   }];

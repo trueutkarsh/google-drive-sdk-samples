@@ -70,10 +70,10 @@ static NSString *const kClientSecret = @"<CLIENT_SECRET>";
   [super viewDidLoad];
   
   // Check for authorization.
-  GTMOAuth2Authentication *auth = 
-  [GTMOAuth2ViewControllerTouch authForGoogleFromKeychainForName:kKeychainItemName
-                                                        clientID:kClientId
-                                                    clientSecret:kClientSecret];
+  GTMOAuth2Authentication *auth =
+    [GTMOAuth2ViewControllerTouch authForGoogleFromKeychainForName:kKeychainItemName
+                                                          clientID:kClientId
+                                                      clientSecret:kClientSecret];
   if ([auth canAuthorize]) {
     [self isAuthorizedWithAuthentication:auth];
   }
@@ -251,7 +251,7 @@ static NSString *const kClientSecret = @"<CLIENT_SECRET>";
     } else {
       NSLog(@"An error occurred: %@", error);
       [DrEditUtilities showErrorMessageWithTitle:@"Unable to load files"
-                                         message:error.description
+                                         message:[error description]
                                         delegate:self];
     }
   }];
