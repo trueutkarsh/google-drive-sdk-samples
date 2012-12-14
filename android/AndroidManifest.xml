@@ -93,7 +93,7 @@
             android:theme="@android:style/Theme.Holo.Light" >
             <meta-data
                 android:name="com.google.android.apps.drive.APP_ID"
-                android:value="id=999336872498" />
+                android:value="id=APPLICATION_ID" />
 
             <!--
                  This filter says that we can view or edit the data of
